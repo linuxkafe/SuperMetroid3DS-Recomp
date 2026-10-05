@@ -1,0 +1,6 @@
+[submodule "extern/SuperMetroidRecomp"]
+	path = extern/SuperMetroidRecomp
+	url = https://github.com/mstan/SuperMetroidRecomp.git
+[submodule "extern/snesrecomp"]
+	path = extern/snesrecomp
+	url = https://github.com/mstan/snesrecomp.git

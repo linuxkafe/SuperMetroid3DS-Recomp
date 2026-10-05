@@ -19,3 +19,11 @@ aes/verification/
 # AES internal tracking (not for publication)
 aes/
 .aes/
+review-queue.json
+review-queue.json.consumed
+# Source ROM — copyrighted, never commit
+*.sfc
+*.smc
+*.fig
+SuperMetroid-usa.sfc
+SuperMetroid-jpn.sfc
