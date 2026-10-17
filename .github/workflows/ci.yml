@@ -1,4 +1,4 @@
-name: SuperMetroidDS CI
+name: SuperMetroid3DS CI
 
 on:
   push:
@@ -7,102 +7,104 @@ on:
     branches: [main, master]
 
 jobs:
-  build:
-    name: Build .nds (devkitARM)
+  frontend:
+    name: Build .3dsx + headless gate (devkitARM + libctru)
     runs-on: ubuntu-latest
     container:
       image: devkitpro/devkitarm:latest
       options: --user root
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Install dependencies
+      # NOT recursive, and deliberately so. The upstream is a read-only external
+      # checkout, not a submodule: see CMakeLists.txt. The DS-era CI checked out
+      # submodules recursively, which is how an in-place edit to a read-only tree
+      # (PPU_T0_DECL in snes/ppu.c) stayed invisible to review.
+      - name: Checkout upstream (read-only, pinned)
         run: |
-          dkp-pacman -Syu --noconfirm nds-dev
-          # cppcheck and clang-format for linting
-          dkp-pacman -S --noconfirm cppcheck clang
+          git clone --depth 1 --branch v0.3.11 --recurse-submodules \
+            https://github.com/mstan/SuperMetroidRecomp.git /tmp/upstream
+          echo "VERSION=$(cat /tmp/upstream/VERSION)" >> $GITHUB_ENV
+          echo "UPSTREAM_ROOT=/tmp/upstream" >> $GITHUB_ENV
 
-      - name: Build
-        run: make
-
-      - name: Verify output
+      - name: Verify upstream pin
         run: |
-          ls -la build/
-          test -f build/SuperMetroidDS.nds
-          test -f build/SuperMetroidDS.arm9.elf
-          test -f build/SuperMetroidDS.arm7.elf
-          ndstool -h build/SuperMetroidDS.nds
+          test "$(cat /tmp/upstream/VERSION)" = "0.3.11" || {
+            echo "unexpected upstream VERSION: $(cat /tmp/upstream/VERSION)"; exit 1; }
+          dirty=$(cd /tmp/upstream && git status --porcelain | wc -l)
+          test "$dirty" -eq 0 || { echo "upstream must be clean, has $dirty changes"; exit 1; }
 
-      - name: Upload artifacts
+      - name: Lint
+        run: |
+          dkp-pacman -S --noconfirm --needed cppcheck
+          # Same command `make lint` runs. Invoked directly rather than through
+          # make because `make lint` uses docker, and this job is already inside
+          # the image — nesting docker-in-container on a runner is a worse way to
+          # get the same result.
+          cppcheck --enable=warning,style --std=c11 --error-exitcode=1 \
+            --suppress=missingIncludeSystem --quiet \
+            -I frontend/3ds -I platform/3ds \
+            frontend platform
+
+      - name: Build frontend (.3dsx)
+        run: |
+          cmake -S . -B build3ds \
+            -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/3DS.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUPSTREAM_ROOT=/tmp/upstream \
+            -DGEN_DIR=/tmp/gen
+          cmake --build build3ds -j$(nproc)
+
+      - name: Verify artifact
+        run: |
+          test -f build3ds/supermetroid3ds.3dsx
+          ls -la build3ds/supermetroid3ds.3dsx
+
+      # The core is deliberately NOT built here. src/gen is ~88 MB of C derived
+      # from the ROM, the ROM is not in the repository by design, and regenerating
+      # it takes far longer than a CI runner should spend. So this job proves the
+      # frontend and the build wiring, and says so rather than implying coverage
+      # it does not have. Core coverage belongs on a self-hosted runner with a ROM.
+      - name: Note the gap
+        run: |
+          echo "::warning::CI builds the frontend only. The recompiled core is not"
+          echo "::warning::built or run here: src/gen is generated from the ROM, which"
+          echo "::warning::is not in this repository. See docs/3DS-PORT-STUDY.md."
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SuperMetroidDS-nds
-          path: |
-            build/SuperMetroidDS.nds
-            build/SuperMetroidDS.arm9.elf
-            build/SuperMetroidDS.arm7.elf
-            build/SuperMetroidDS.map
-          retention-days: 30
+          name: supermetroid3ds-3dsx
+          path: build3ds/supermetroid3ds.3dsx
 
-  lint:
-    name: Lint (cppcheck)
+  gate:
+    name: Headless behavioural gate (Azahar)
     runs-on: ubuntu-latest
-    container:
-      image: devkitpro/devkitarm:latest
-      options: --user root
+    needs: frontend
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install cppcheck
-        run: dkp-pacman -S --noconfirm cppcheck
+      - uses: actions/download-artifact@v4
+        with:
+          name: supermetroid3ds-3dsx
 
-      - name: Run cppcheck
+      - name: Install Azahar
         run: |
-          cppcheck --enable=all --std=c11 \
-            --suppress=missingIncludeSystem \
-            --suppress=unusedFunction \
-            --suppress=unmatchedSuppression \
-            src/ src/arm7/ include/ 2>&1 | head -100
+          curl -sL -o azahar.AppImage \
+            https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar.AppImage
+          chmod +x azahar.AppImage && ./azahar.AppImage --appimage-extract
+          sudo apt-get update && sudo apt-get install -y xvfb
 
-  format:
-    name: Format Check (clang-format)
-    runs-on: ubuntu-latest
-    container:
-      image: devkitpro/devkitarm:latest
-      options: --user root
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install clang-format
-        run: dkp-pacman -S --noconfirm clang
-
-      - name: Check formatting
+      - name: Run the gate
+        env:
+          AZAHAR: ${{ github.workspace }}/squashfs-root/usr/bin/azahar
         run: |
-          find src/ src/arm7/ include/ -name '*.c' -o -name '*.h' | \
-          xargs clang-format --dry-run --Werror 2>&1 | head -50
+          bash scripts/gate-headless.sh supermetroid3ds.3dsx 120
 
-  # Test on emulator (optional, requires melonDS)
-  # test:
-  #   name: Test on melonDS
-  #   runs-on: ubuntu-latest
-  #   container:
-  #     image: devkitpro/devkitarm:latest
-  #     options: --user root
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Install melonDS
-  #       run: |
-  #         apt-get update && apt-get install -y melonds
-  #     - name: Build
-  #       run: make
-  #     - name: Run headless test
-  #       run: timeout 30 melonDS build/SuperMetroidDS.nds --headless || true
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+      # As in the build job, the core is not linked, so a pass here means "the
+      # frontend boots and terminates on cue" and nothing more. The gate prints
+      # this note itself; the note here is for the log reader.
+      - name: Interpret
+        run: |
+          echo "with_core=0 is expected: this gate covers the frontend, not the game."

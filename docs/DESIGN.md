@@ -1,78 +1,124 @@
-# Design — Nintendo DS Hardware Specification
+# Design — Nintendo 3DS Hardware
 
-## Memory Map (ARM9)
+Spec for the target machine, and what each part means for this port. Every
+figure here is a platform constant or a measured build result; nothing is a guess
+about how fast anything runs.
 
-| Region | Size | Purpose |
-|--------|------|---------|
-| Main RAM (EWARM) | 4 MB | Recompiled banks, runtime, heap pools, frame buffers |
-| VRAM A (Main BG) | 128 KB | Main screen backgrounds, textures |
-| VRAM B (Main OBJ) | 128 KB | Main screen sprites/OBJ |
-| VRAM C (Sub BG) | 128 KB | Sub screen backgrounds |
-| VRAM D (Sub OBJ) | 128 KB | Sub screen sprites |
-| VRAM E (Palettes) | 64 KB | BG/OBJ palettes (both screens) |
-| VRAM F (Extended) | 16 KB | Overflow / Mode 7 texture cache |
-| VRAM G (Extended) | 16 KB | Overflow |
-| VRAM H (Extended) | 32 KB | Overflow |
-| VRAM I (LCD) | 64 KB | Direct LCD access / frame capture |
-| ARM9 BIOS | 32 KB | Boot, SWI handlers (read-only) |
-| ARM9 ITCM | 32 KB | Critical hot code (NMI, IRQ, fiber switch) |
-| ARM9 DTCM | 16 KB | Critical hot data (CPU regs, frame state) |
+## Memory
 
-## Memory Map (ARM7)
+| Region | Size | Use here |
+|---|---|---|
+| App linear memory | 64 MB | The recompiled core, runtime, frame buffers |
+| System RAM | 256 MB total | OS, apps |
+| VRAM | ~6 MB usable | 3D GPU, textures |
+| System shared | 128 MB | Services (gfx, ndsp, hid, soc) |
 
-| Region | Size | Purpose |
-|--------|------|---------|
-| ARM7 WRAM | 128 KB | Audio mixer (maxmod), IPC, WiFi, touch |
-| ARM7 BIOS | 16 KB | Boot, SWI handlers |
+This is the decisive difference from the DS, where a 4 MB static ROM buffer did
+not fit a 3.5 MB ARM9 region and ended that attempt. **The core's footprint is
+not yet measured** — the ~28 MB figure in `3DS-PORT-STUDY.md` is extrapolated from
+one compiled bank (T025).
 
-## Pool/Arena Strategy
+## CPU
 
-- **Bank Pool**: Static allocation for each recompiled bank (known sizes from regen.sh)
-- **Frame Arena**: Per-frame scratch (PPU buffers, DMA lists) — reset each VBlank
-- **Audio Arena**: ARM7-owned, double-buffered sample buffers
-- **Save Arena**: SRAM buffer (8 KB max for Super Metroid)
-- **No malloc/free** in NMI, IRQ, HDMA, or frame loop
+| | DS (abandoned) | 3DS |
+|---|---|---|
+| Core | ARM9 @ 67 MHz | ARM11 @ 268 MHz |
+| Cores | 1 | 4 |
+| FPU | none | NEON + VFPv4 |
+| Multilib | ARM946E-S | `armv6k/fpu` |
 
-## Video Architecture
+Build flags: `-march=armv6k -mfloat-abi=hard -mfpu=vfp`.
 
-- **Main Screen (256×192)**: Gameplay via BG layers (BG0=main, BG1=sub, BG2=HUD, BG3=Mode 7)
-- **Sub Screen (256×192)**: Minimap + HUD (energy, reserves, ammo, map)
-- **Mode 7**: SNES Mode 7 → DS BG3 affine + HDMA per-scanline params
-- **Palettes**: 15-bit BGR (SNES) → 15-bit BGR (DS), direct mapping
-- **VRAM Management**: Double-buffered BG maps, DMA copy during VBlank
+The FPU matters for the core: NTSC timing arithmetic uses `double`, and the DS
+ARM9 has no hardware for it. That is a reason to expect the 3DS to be faster, and
+it is **not** a measurement. No frame-time number for this port exists.
 
-## Audio Architecture
+### The fiber problem
 
-- **ARM7 (maxmod)**: 16 channels — 8 PSG (square/noise) + 8 PCM (samples)
-- **SPC700 → DS**: Intercept SPC uploads in `sm_spc_player.c`, translate to maxmod commands via FIFO/IPC
-- **Sample Rate**: SNES 32 kHz → DS 32 kHz (native) or 48 kHz (maxmod default)
-- **Sync**: VBlank-driven audio frame (≈16.67 ms)
+`snesrecomp`'s scheduler switches cooperatively between contexts with their own C
+stacks. Its POSIX backend is `ucontext_t`-based, and:
 
-## Input Mapping
+```
+$ echo '#include <ucontext.h>' | arm-none-eabi-gcc -c -march=armv6k -
+fatal error: ucontext.h: No such file or directory
+```
 
-| DS Key | SNES Button |
-|--------|-------------|
-| D-Pad | D-Pad |
-| A | B (confirm/fire) |
-| B | A (cancel/jump) |
-| X | X (dash) |
-| Y | Y (item select) |
-| L | L (aim up) |
-| R | R (aim down) |
-| Start | Start |
-| Select | Select |
+Options, none chosen (T027): a hand-written ARM11 context switch, real threads via
+`pthread.h` (available, but changes snapshot semantics), or stubbing — rejected,
+because a stubbed scheduler yields a binary that builds and misbehaves.
 
-## Build Configuration
+## Screens
 
-- **Toolchain**: devkitARM (arm-none-eabi-gcc), libnds, maxmod, fatfs
-- **C Standard**: C11 (`-std=c11 -ffreestanding`)
-- **Optimization**: `-O2 -fno-tree-vectorize` (size/speed balance)
-- **Sections**: `.itcm` (ITCM), `.dtcm` (DTCM), `.rwarm` (main RAM)
-- **Linker Script**: Custom `ds.ld` defining memory regions above
+| Screen | Resolution | Role |
+|---|---|---|
+| Top | 400 × 240 (2D framebuffer) | The SNES composite |
+| Bottom | 320 × 240, touch | Console, later the HUD |
 
-## Regeneration Pipeline
+Both are initialised `GPU_RGB565`. The SNES composite is already RGB565, so no
+colour conversion happens on the way to the panel.
 
-- `tools/regen.sh --strict-idempotent` runs on host (x86_64) — produces `src/gen/`
-- Generated C is **platform-agnostic** (pure 65816 recompilation)
-- DS build consumes `src/gen/` + hand-written DS runtime
-- `recomp/*.cfg` never modified without full regeneration
+Scaling is **integer only**, at least 1:1, centred. A fractional scale would need
+a resampler, and nearest-neighbour on 256 × 224 pixel art at 1.5× shimmers
+visibly. Half-pixel letterbox bars cost less than a resampler that can differ
+between runs.
+
+Dimensions come from `gfxGetFramebuffer`, not from the constant 400 × 240 — a
+2DS would report differently.
+
+## Input
+
+HID → SNES pad word, active low (a set bit means released). Built from
+`SM_PAD_NEUTRAL` with pressed bits cleared, so the polarity lives in one place
+rather than being inverted at each call site.
+
+D-pad, A/B/X/Y, L/R, START, SELECT map straight across. The C-stick and touch
+screen are **not** mapped — the SNES has no analogue control, and mapping them
+would be inventing behaviour.
+
+## Audio
+
+| | Value |
+|---|---|
+| Core (LLE APU) output | 32,040 Hz stereo S16 |
+| 3DS DAC | 48,000 Hz stereo |
+| Interface | `ndsp`, channel 0, linear interpolation |
+
+**No resampler.** The mismatch is real and is deferred deliberately to T029: a
+resampler is DSP with its own edge cases, and a wrong pitch is worse than a known
+gap.
+
+libctru 2.7 exposes `ndspChnIsPlaying` but no "samples remaining", so the drain
+wait covers a whole buffer — up to ~6 ms of latency at the current buffer size.
+
+## Networking
+
+3DS **does** have BSD sockets, via libctru's `soc` service. This corrects an
+earlier conclusion in this project that it did not; see the retraction in
+`3DS-PORT-STUDY.md`.
+
+Port allocation is shared with a sibling project on the same machine:
+
+| Port | Owner |
+|---|---|
+| 5002 | SimCity-3DS-Port — **not this port** |
+| 5003 | this port, command protocol |
+| 5004 | this port, GDB RSP |
+
+## Toolchain
+
+| Thing | Value |
+|---|---|
+| Image | `devkitpro/devkitarm` |
+| Compiler | devkitARM 16.1.0, GCC |
+| Library | libctru 2.7.0 (`libctru.a` — there is no separate `perf3ds` any more) |
+| Toolchain file | `/opt/devkitpro/cmake/3DS.cmake` |
+| Packager | `3dsxtool` |
+
+Two traps recorded here because both cost time:
+
+- devkitPro moved its cmake files to `/opt/devkitpro/cmake/`, not
+  `$(DEVKITARM)/cmake/Platform/`.
+- Do **not** pass `-specs=3dsx.specs` yourself. `devkitARM.cmake` already passes
+  it, and passing it twice makes gcc process `sync-dmb.specs` (which
+  `3dsx.specs` includes) twice: *"attempt to rename spec 'link' to already
+  defined spec 'sync_sync_link'"*.

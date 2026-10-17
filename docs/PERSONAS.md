@@ -1,48 +1,41 @@
 # Personas
 
-## User: DS Homebrew Player
+## User: 3DS Homebrew Player
 
-**Profile:** Owns a Nintendo DS/DSi/3DS with flashcart (R4, EZ-Flash, etc.) or plays on emulator (melonDS, DeSmuME). Wants to play Super Metroid faithfully on DS hardware. Values accuracy, performance, and authentic feel.
+**Profile:** Owns a 3DS or 2DS with a flashcart (Luma3DS, AtDstry) or runs
+Azahar. Wants Super Metroid on the hardware they have.
 
-**Goals:**
-- Play Super Metroid at 60 FPS on real DS hardware
-- Authentic SNES gameplay — no mods, widescreen, or enhancements
-- Save/load works reliably on flashcart/SD
-- Simple launch: copy `.nds` + ROM to SD, run
+**Goals**
+- Play Super Metroid on a 3DS, faithfully
+- A frame rate that makes the game playable
+- Save/load that does not corrupt
+- Install by copying one file
 
-**Pain Points:**
-- Existing SNES emulators on DS are slow/inaccurate for Super Metroid
-- Complex setup (per-game config, BIOS files, etc.)
-- Save corruption or incompatibility between emulators
+**Pain points**
+- SNES emulators on 3DS are not fast enough for Super Metroid
+- Flashcart installs are fiddly and easy to get wrong
+- Ports that claim 60 FPS and deliver 15
 
----
-
-## User: Preservation Enthusiast
-
-**Profile:** Interested in static recompilation as a preservation technique. Wants to see snesrecomp work on a constrained embedded platform (DS) as a proof of concept.
-
-**Goals:**
-- Verify LLE-first recompilation runs on ARM9 without host OS
-- Study memory/performance characteristics on 4MB RAM target
-- Reference implementation for future recompilation ports (GBA, other consoles)
-
-**Pain Points:**
-- Lack of documented recompilation ports to bare-metal/embedded
-- PC-centric build assumptions in snesrecomp framework
-
----
+**What they need from this project right now:** nothing. The port does not run
+the game yet. The honest state is in the README's first paragraph, and that is
+the correct thing to show them.
 
 ## Maintainer
 
-**Profile:** Engineer maintaining this port long-term. Familiar with C, ARM, devkitPro, SNES architecture.
+**Profile:** Works in this workspace alongside `SimCity-3DS-Port`. Comfortable
+with devkitPro, cross-compilation, and AES.
 
-**Goals:**
-- Keep port in sync with upstream SuperMetroidRecomp/snesrecomp
-- Maintain deterministic regeneration pipeline
-- Ensure build reproducibility across devkitARM versions
-- Document DS-specific adaptations for future porters
+**Needs**
+- Upstream to stay untouched, so that updating it is a pin change
+- Every performance number to say what it measured and what it did not
+- No green gate that means less than it says
 
-**Tools:**
-- AES (Ambrósio Engineering System) for all changes
-- `make check` for validation (build, lint, test on emulator)
-- devkitPro toolchain, melonDS for CI testing
+**Failure modes this project has already hit, and now guards against**
+
+| Failure | Guard |
+|---|---|
+| Editing the read-only upstream, invisible in this repo's diff | Read-only external checkout; `make upstream-check` |
+| A ROM-derived file reaching git | `.gitignore` covers `src/gen/` and `src/supermetroid_rom.h` |
+| A green gate that only proved a build | `make test` asserts a frame count |
+| A measurement nobody could reproduce | `docs/3DS-PORT-STUDY.md` separates measured from extrapolated |
+| Two ports fighting over a TCP port | 5003/5004, recorded in `CLAUDE.md` |

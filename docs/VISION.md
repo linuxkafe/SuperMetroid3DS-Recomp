@@ -2,25 +2,51 @@
 
 ## Problem
 
-The Super Metroid static recompilation (SuperMetroidRecomp) runs on PC platforms (Windows, Linux, macOS, Android) using SDL/OpenGL. There is no Nintendo DS port. The DS hardware (dual ARM CPUs, 4MB RAM, dual screens, no OS, no standard library) is fundamentally different from PC targets, requiring a complete host layer rewrite while preserving the recompiled game logic.
+The Super Metroid static recompilation ([SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp))
+runs on PC (Windows, Linux, macOS, Android) through SDL. There is no Nintendo 3DS
+port. The 3DS is a very different machine — ARM11, VFPv4, dual screens, a
+homebrew loader rather than an OS — so running the recompiled game logic there
+means writing a new host layer while leaving the game itself alone.
 
-Nintendo DS homebrew players and preservation enthusiasts cannot experience this faithful recompilation on original hardware. Existing SNES emulators on DS (e.g., SNES9x DS) run via interpretation and struggle with full-speed Super Metroid due to the SNES's complex PPU/APU/DMA architecture. A static recompilation port would offer near-native performance by running the recompiled 65816 CPU code directly on ARM.
+3DS homebrew players and preservationists have no way to play this faithful
+recompilation on 3DS hardware. Existing SNES emulators there run by interpretation
+and do not have the headroom for Super Metroid's PPU, APU and DMA behaviour. A
+static recompilation port would run the original compiled code natively.
 
 ## Solution
 
-Port the LLE-first recompiled C codebase to Nintendo DS using devkitPro (devkitARM) and libnds:
+Port the recompiled core to 3DS using devkitPro/devkitARM and libctru:
 
-1. **Replace the host layer** — Remove all SDL, OpenGL, recomp-ui launcher, and desktop-specific code. Implement DS-specific equivalents: libnds video (BG layers, OBJ, Mode 7), audio (SPC700 → DS PSG/PCM), input (DS keypad/touch), and file I/O (fatfs/ndsfs).
-2. **Adapt the runtime** — Modify `sm_rtl.c` single-fiber frame model for DS dual-CPU architecture (ARM9 main, ARM7 audio/coproc). Handle NMI/IRQ/HDMA on DS hardware timers and VBlank.
-3. **Memory management** — Fit recompiled banks + runtime + assets into 4MB main RAM + 64KB VRAM per screen. Use static pools/arenas, no malloc in hot paths.
-4. **Build system** — CMake/Makefile targeting devkitARM, producing `.nds` ROM.
-5. **Regeneration pipeline** — Keep `tools/regen.sh` deterministic; generated `src/gen/` stays local (not committed).
+1. **Own the host layer.** All 3DS-specific code lives in `frontend/3ds/` (video,
+   input, audio, frame loop) and `platform/3ds/` (replacing the framework's SDL
+   include boundary). Upstream's SDL entry point is excluded, not edited.
+2. **Keep upstream read-only.** Consumed from outside the repository, never
+   vendored, never modified in place. Changes that cannot be expressed in the
+   frontend go to `patches/`, which is currently empty.
+3. **Generate the core from the ROM.** `src/gen/` (~88 MB of C, 116 units) comes
+   from upstream's `v2_regen.py` and is never committed, because it is derived
+   from copyrighted ROM data.
+4. **Gate honestly.** `SM_WITH_CORE` defaults off until the fiber backend exists,
+   and the build says so on screen rather than producing a binary that builds and
+   misbehaves.
 
-The recompiled CPU logic (`src/gen/`, `recomp/*.cfg`) is **not modified** — it is the ground truth. Only the host shim and platform abstraction change.
+The recompiled game logic (`src/gen/`, `recomp/*.cfg`) is **not modified**. It is
+upstream's ground truth.
 
 ## Value
 
-- **Preservation**: Faithful Super Metroid on original DS hardware via static recompilation, not emulation
-- **Performance**: Recompiled 65816 → ARM runs near-native; only PPU/APU/DMA emulated
-- **Reference port**: Demonstrates snesrecomp framework portability to constrained embedded targets
-- **Community**: DS homebrew gets a flagship title showcasing recompilation vs. interpretation
+- **Preservation** — faithful Super Metroid on 3DS hardware, by recompilation
+  rather than emulation
+- **Portability evidence** — the snesrecomp framework reaching a fourth embedded
+  target, with the host-layer cost written down
+- **A reusable pattern** — read-only upstream plus an owned frontend is now
+  proven on two ports in this workspace (SimCity and this one)
+
+## What "done" means
+
+Not "it boots". Specifically:
+
+- The core is linked and runs (needs T027)
+- A frame from this port matches the upstream PC build's output for the same ROM
+  and input sequence (T030)
+- Frame time is measured, not extrapolated (T026)

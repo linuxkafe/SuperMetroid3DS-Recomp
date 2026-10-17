@@ -7,6 +7,9 @@ coverage.out
 target/
 dist/
 build/
+build3ds/
+build-instr/
+build-tr/
 .venv/
 env/
 .idea/
@@ -16,14 +19,55 @@ env/
 .tmp/
 aes/verification/
 .llm_venv/
+
 # AES internal tracking (not for publication)
 aes/
 .aes/
 review-queue.json
 review-queue.json.consumed
-# Source ROM — copyrighted, never commit
+
+# --- ROM and derived ROM data -----------------------------------------
+# Copyrighted. Never committed, never redistributed.
 *.sfc
 *.smc
 *.fig
 SuperMetroid-usa.sfc
 SuperMetroid-jpn.sfc
+# A generated C header embedding the whole 3 MB ROM as a byte array.
+# It is a ROM in source clothing, so the extension does not save it.
+supermetroid_rom.h
+**/supermetroid_rom.h
+rom_sfc_data*
+# The generated recompiled core: ~88 MB of C derived from the ROM.
+# Upstream gitignores it too, and for the same reason.
+src/gen/
+gen/
+
+# --- Build output ------------------------------------------------------
+*.nds
+*.3dsx
+*.3dsi
+*.elf
+*.map
+*.smdh
+*.o
+*.a
+*.dsi
+# assets/banner.bin is the one tracked binary — a placeholder icon.
+*.bin
+!assets/banner.bin
+
+# --- Emulator / deck scratch ------------------------------------------
+melond*.zip
+no_ppu*.nds
+real_main*.nds
+test[0-9]*.nds
+test_nitrofs.*
+dbpm9.bin
+nppu9.bin
+probes/
+debug/net/
+aes-build/
+
+# --- Toolchains --------------------------------------------------------
+devkitpro/

@@ -1,338 +1,185 @@
-# SuperMetroidDS — Nintendo DS Port Makefile
-# Milestone 1: interpreter-first LLE core from extern/snesrecomp/runner/src
-# + the DS shim layer (ds_*). No generated code (src/gen) is compiled.
-# Compatible with devkitpro/devkitarm Docker image.
-
-# --- CONFIGURATION ---
-TARGET       := SuperMetroidDS
-BUILD        := build
-SOURCES      := src
-INCLUDES     := include
-DATA         := assets
-ARM7_SOURCES := src/arm7
-
-# Build environment.
+# SuperMetroid3DS — build, test and environment helpers.
 #
-# The gates below used to degrade to `|| echo "<tool> not installed (OK in
-# container)"` and exit 0, so `make check` reported success while checking
-# nothing -- including on a tree that had never been compiled. A gate that
-# cannot fail is not a gate. Tools are now resolved against a real toolchain,
-# and if none is present the build runs inside the pinned devkitPro container
-# (see Dockerfile). If neither is available the gates fail loudly.
-#
-# Override with DOCKER=0 to require a native toolchain, or DEVKITPRO=/path to
-# point at a local install.
-DOCKER       ?= 1
-DEVKITPRO    ?= /opt/devkitpro
-DEVKITARM    ?= $(DEVKITPRO)/devkitARM
-CONTAINER    ?= devkitpro/devkitarm:latest
-CONTAINER_WORKDIR := /source
+# The upstream SuperMetroidRecomp checkout is READ-ONLY and lives OUTSIDE this
+# repository. See docs/3DS-PORT-STUDY.md for why, and CMakeLists.txt for the
+# consequences. Nothing here ever writes to $(UPSTREAM).
 
-# `command -v` rather than a bare name lookup: shell builtins and aliases must
-# not be able to satisfy a tool probe.
-HAVE_DOCKER  := $(shell command -v docker >/dev/null 2>&1 && echo yes || echo no)
-HOST_UID      := $(shell id -u)
-HOST_GID      := $(shell id -g)
-HAVE_CC      := $(shell test -x "$(DEVKITARM)/bin/arm-none-eabi-gcc" && echo yes || echo no)
-HAVE_CPPCHECK:= $(shell command -v cppcheck >/dev/null 2>&1 && echo yes || echo no)
-HAVE_CLANGFMT:= $(shell command -v clang-format >/dev/null 2>&1 && echo yes || echo no)
-HAVE_MELONDS := $(shell command -v melonDS >/dev/null 2>&1 && echo yes || echo no)
+DOCKER_IMAGE ?= devkitpro/devkitarm
+WORK_DIR     ?= $(CURDIR)
 
-# Run a command inside the toolchain: natively when devkitARM is installed,
-# otherwise through the container. USE_DOCKER is resolved once, at parse time.
-ifeq ($(HAVE_CC),yes)
-  TOOLCHAIN_ENV := native
-  TOOLRUN :=
-else ifeq ($(DOCKER),1)
-  ifeq ($(HAVE_DOCKER),yes)
-    TOOLCHAIN_ENV := container
-    # Run as the invoking uid:gid. Without this the container writes build/
-    # artifacts owned by root, and the *next* `make clean` silently fails to
-    # remove them -- leaving stale objects that make a rebuild lie about what
-    # was compiled. That happened here: root-owned .o files from an earlier run
-    # survived `make clean` and masked a real fix across several rebuilds.
-    TOOLRUN := docker run --rm -u $(HOST_UID):$(HOST_GID) \
-                 -v "$(CURDIR):$(CONTAINER_WORKDIR)" -w $(CONTAINER_WORKDIR) $(CONTAINER)
-  else
-    TOOLCHAIN_ENV := none
-    TOOLRUN :=
-  endif
-else
-  TOOLCHAIN_ENV := none
-  TOOLRUN :=
-endif
+# Read-only upstream, pinned to v0.3.11. Verify with `make upstream-check`.
+UPSTREAM     ?= /home/seyon/dev/Games/PC/SuperMetroidRecomp
+UPSTREAM_REF ?= v0.3.11
 
-# Inside the container devkitPRO lives at /opt/devkitpro. Deriving LIBNDS_PATH
-# and CALICO_PATH from DEVKITPRO below means they must be correct here too, so
-# DEVKITPRO is repointed rather than cleared.
-ifeq ($(TOOLCHAIN_ENV),container)
-  DEVKITPRO := /opt/devkitpro
-  DEVKITARM := $(DEVKITPRO)/devkitARM
-endif
+# Generated core output: ~88 MB of C derived from the ROM. Never committed.
+GEN_DIR      ?= /home/seyon/dev/Games/PC/SuperMetroid3DS-build/gen
 
-CC           := $(DEVKITARM)/bin/arm-none-eabi-gcc
-LD           := $(DEVKITARM)/bin/arm-none-eabi-gcc
-OBJCOPY      := $(DEVKITARM)/bin/arm-none-eabi-objcopy
-NDSTOOL      := $(DEVKITPRO)/tools/bin/ndstool
+# The user's own legally obtained ROM. Not committed, not redistributed.
+ROM_PATH     ?= $(CURDIR)/SuperMetroid-usa.sfc
 
-# --- Runner core (snesrecomp framework) ---
-RUNNER_ROOT  := extern/snesrecomp/runner
-RUNNER_SRC   := $(RUNNER_ROOT)/src
+# SimCity-3DS-Port owns TCP 5002. This port must not collide with it: two
+# builds on the Deck running their debug bridges at once would cross-connect,
+# and the resulting measurements would be garbage that looks real. Hence 5003
+# (command protocol) and 5004 (GDB RSP). See CLAUDE.md.
+SM_DBG_PORT  ?= 5003
+SM_GDB_PORT  ?= 5004
 
-# Sources that provide globals the shim expects.
-#
-# common_cpu_infra.c defines `Snes *g_snes` (declared extern in
-# common_cpu_infra.h:15) and is referenced throughout the shim (ds_rtl.c,
-# ds_rtl_support.c) and the runner core. It was missing here, so every one of
-# those references compiled and then failed at link.
-#
-# common_rtl.c is NOT included: it collides with src/ds_rtl_support.c, which
-# defines the same globals (g_rom, g_snesrecomp_last_hdmaen,
-# g_main_cpu_cycles_estimate, g_apu_pace_cycles_estimate,
-# g_apu_last_sync_cycles, g_interp_apu_driving) and additionally redefines
-# g_isTwlMode, which libnds/calico already provides. The DS port supplies its
-# own RTL layer via ds_rtl*.c; common_rtl.c is the desktop host's.
-#
-# Consequence: RtlRunFrame and the netplay/cosim entry points that live in
-# common_rtl.c are absent from the DS build. main.c calls RunOneFrameOfGame(),
-# so that symbol's absence is a real gap -- see docs/ROADMAP.md [DISCOVERED].
-RUNNER_CORE  := \
-	cpu_state.c common_cpu_infra.c \
-	snes/snes.c snes/cpu.c snes/cart.c snes/ppu.c snes/dma.c snes/joypad.c \
-	snes/apu.c snes/spc.c snes/dsp.c snes/msu1.c snes/superfx.c snes/sa1.c \
-	snes/sdd1.c snes/dsp1.c snes/dsp1_hle.c snes/cx4.c \
-	snes/interp816.c snes/interp_bridge.c snes/tier2_capture.c \
-	snes/audio_shadow.c snes/dsp_shadow.c snes/ws_shadow.c snes/color_lut.c \
-	snes/ppu_legacy.c snes/snes_other.c \
-	audio_trace.c \
-	recomp_hw.c ppu_dma_trace.c snes_runahead.c framedump.c
-#
-# audio_trace.c and ppu_dma_trace.c look like removable desktop diagnostics
-# (545 KB + 295 KB of .bss) and were removed on that basis. That was wrong and
-# cost a link cycle: the runner core calls them from the hot APU and DMA paths
-# (apu.c:78 audio_trace_on_cpu_port_apply; ppudma_record_dma). Their ring
-# buffers are the storage those hooks write. Removing the file removes the
-# storage, so the hooks must be stubbed to drop it -- which is a deliberate
-# behaviour change to APU tracing, not a build cleanup.
-#
-# The .bss they cost (840 KB against a 3.5 MB region) is real and is a genuine
-# budget problem on a 4 MB DS. It is tracked as such rather than solved by
-# deleting the storage out from under live call sites.
+# devkitPro ships toolchain files under /opt/devkitpro/cmake, NOT under
+# $(DEVKITARM)/cmake/Platform. The old path does not exist in the image.
+TOOLCHAIN    ?= /opt/devkitpro/cmake/3DS.cmake
 
-# Architecture flags
-ARCH         := -mthumb -mthumb-interwork
+# Headless emulator for behavioural tests. Azahar needs a display server even
+# when it renders nothing, hence xvfb-run.
+AZAHAR       ?= /home/seyon/dev/tools/azahar/usr/bin/azahar
 
-# Platform defines
-PLATFORM_DEFS_ARM9 := -DARM9 -D__NDS__
-PLATFORM_DEFS_ARM7 := -DARM7 -D__NDS__
+.PHONY: all docker-build build clean doctor setup upstream-check regen \
+        prepare size lint test check emulator-headless
 
-# Paths
-LIBNDS_PATH  := $(DEVKITPRO)/libnds
-CALICO_PATH  := $(DEVKITPRO)/calico
+all: docker-build
 
-# ARM9 flags: base + runner safety.
-# NOTE: -ffast-math was dropped for the runner core (FP-correct APU pacing).
-# Feature flags for DS build: enable only what we need; omit disabled features.
-#
-# These MUST be omitted, not defined as 0. The runner guards these features with
-# a mix of `#ifdef X` (presence test) and `#if X` (value test). `-DX=0` satisfies
-# the former and defeats the latter: `#ifdef SNES_COSIM` is TRUE when
-# SNES_COSIM is defined as 0, so the "disabled" code path compiles and references
-# symbols that live in files this build does not compile (common_rtl.c), and the
-# link fails with undefined references to cosim_insn, cosim_apu_shared_clock,
-# rtl_apu_* and friends.
-#
-# Omitting the define makes both spellings agree: `#ifdef` is false, `#if` is
-# false. Verified per-flag against the runner sources:
-#   SNES_COSIM                  -> #ifdef in cosim.h, interp_bridge.c, common_rtl.h
-#   SNESRECOMP_ENABLE_MODS      -> #if  (6 sites)   safe either way
-#   SNESRECOMP_FRAME_FINGERPRINTS -> #if (2 sites)  safe either way
-#   SNESRECOMP_INTERP_PROFILE   -> #ifdef (7 sites) MUST be omitted
-#   SNESRECOMP_NET_ROLLBACK     -> #ifdef (1 site)  MUST be omitted
-#
-# SNESRECOMP_AUDIO_TRACE_HISTORY=0 selects the upstream-supported COUNTERS mode
-# (audio_trace.h:76-78 sets AUDIO_TRACE_PCM_RING / _EVENT_RING / _SNAP_RING to 0).
-# The runner core calls the trace hooks from the hot APU path (apu.c:78), so the
-# file stays compiled and the hooks stay live -- but every write to retained
-# history is behind AUDIO_TRACE_WRITES_HISTORY and drops out, so the three ring
-# buffers (545 KB of .bss) are not allocated. Counters are still maintained.
-# This is a supported upstream configuration, not a local hack: FULL mode would
-# ask for 16 MiB of PCM ring, which no DS build could ever satisfy.
-#
-# SNESRECOMP_PPU_DMA_HISTORY=0 does the same for the DMA/PPU snapshot rings
-# (288 KB): ppu_dma_trace.c:235 compiles ppudma_record_dma and
-# ppudma_frame_snapshot down to (void)-parameter no-ops, so snes.c:773 keeps
-# calling them from the DMA enable path and still links. Verified the call at
-# snes.c:773 is NOT guarded by the macro, which is why the file must stay in
-# RUNNER_CORE and be switched off rather than deleted.
-#
-# Both history switches cost host-side forensics (multi-minute APU/HDMA
-# post-mortems). Neither is on the DS critical path: the DS has no report
-# writer. Re-enable both on a host build if a trace session needs them.
-FEATURE_DEFS := -DSNESRECOMP_AUDIO_TRACE_HISTORY=0 \
-                -DSNESRECOMP_PPU_DMA_HISTORY=0
-CFLAGS       := -g -Wall -O2 -std=gnu11 -mcpu=arm946e-s -mtune=arm946e-s \
-                -fomit-frame-pointer \
-                $(PLATFORM_DEFS_ARM9) $(FEATURE_DEFS) $(ARCH)
-CXXFLAGS     := $(CFLAGS) -fno-rtti -fno-exceptions
-ASFLAGS      := -g $(ARCH)
+# ── Build ─────────────────────────────────────────────────────────────────
 
-# ARM7 flags
-ARM7_CFLAGS  := -g -Wall -O2 -std=gnu11 -mcpu=arm7tdmi -mtune=arm7tdmi \
-                -fomit-frame-pointer \
-                $(PLATFORM_DEFS_ARM7) $(ARCH)
+docker-build:
+	@echo "==> Building SuperMetroid3DS (3DSX) in $(DOCKER_IMAGE)"
+	docker run --rm \
+		-v "$(UPSTREAM):/upstream:ro" \
+		-v "$(WORK_DIR):/work" \
+		-v "$(GEN_DIR):/gen" \
+		-w /work \
+		$(DOCKER_IMAGE) \
+		bash -c '\
+			set -e -o pipefail; \
+			export DEVKITPRO=/opt/devkitpro DEVKITARM=$$DEVKITPRO/devkitARM; \
+			export PATH=$$DEVKITARM/bin:$$PATH; \
+			mkdir -p build3ds && cd build3ds && \
+			cmake .. \
+				-DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN) \
+				-DCMAKE_BUILD_TYPE=Release \
+				-DUPSTREAM_ROOT=/upstream \
+				-DGEN_DIR=/gen && \
+			make -j$$(nproc) 2>&1 | tail -60'
 
-# Includes: DS shim FIRST (config.h), then runner, then the runner's snes/,
-# then the DS project headers.
-INCLUDE      := -Ids/include -I$(RUNNER_SRC) -I$(RUNNER_SRC)/snes \
-                -I$(INCLUDES) -I$(LIBNDS_PATH)/include -I$(CALICO_PATH)/include
-CFLAGS      += $(INCLUDE)
-CXXFLAGS    += $(INCLUDE)
-ARM7_CFLAGS += $(INCLUDE)
+# Native build, if devkitARM is installed on the host.
+build:
+	@command -v arm-none-eabi-gcc >/dev/null 2>&1 || \
+		{ echo "arm-none-eabi-gcc not found. Use 'make docker-build'."; exit 1; }
+	@mkdir -p build3ds && cd build3ds && \
+		cmake .. -DCMAKE_BUILD_TYPE=Release \
+			-DUPSTREAM_ROOT=$(UPSTREAM) -DGEN_DIR=$(GEN_DIR) && \
+		make -j$(shell nproc)
 
-# ARM9 link flags
-LDFLAGS      := -g $(ARCH) -specs=$(CALICO_PATH)/share/ds9.specs -Wl,-Map,$(BUILD)/$(TARGET).map \
-                -L$(LIBNDS_PATH)/lib -L$(CALICO_PATH)/lib
-# ARM7 link flags
-ARM7_LDFLAGS := -g $(ARCH) -specs=$(CALICO_PATH)/share/ds7.specs \
-                -L$(LIBNDS_PATH)/lib -L$(CALICO_PATH)/lib
+# ── Generated core ────────────────────────────────────────────────────────
+# The recompiled C is generated from the ROM by upstream's own tooling. It is
+# ~88 MB and takes a long time; that cost is why it is a separate target and not
+# part of `make build`.
+regen:
+	@if [ ! -f "$(ROM_PATH)" ]; then \
+		echo "ROM not found at $(ROM_PATH)."; \
+		echo "Place a legally obtained Super Metroid (Japan, USA) .sfc there."; \
+		echo "The expected sha256 is in \$$UPSTREAM/rom_identity.txt."; \
+		exit 1; \
+	fi
+	@mkdir -p "$(GEN_DIR)"
+	cd $(UPSTREAM) && python3 snesrecomp/tools/v2_regen.py \
+		--rom "$(ROM_PATH)" \
+		--cfg-dir recomp \
+		--out-dir "$(GEN_DIR)" \
+		--jobs $(shell nproc)
+	@echo "==> Generated: $$(ls -1 $(GEN_DIR)/*.c 2>/dev/null | wc -l) translation units"
 
-# Libraries
-LIBS        := -Wl,--start-group -lnds9 -lcalico_ds9 -Wl,--end-group -lfat -lmm9 -lm
-ARM7_LIBS   := -lnds7 -lcalico_ds7
-
-# Source files
-CFILES       := $(wildcard $(SOURCES)/*.c)
-SFILES       := $(wildcard $(SOURCES)/*.s)
-ARM7_CFILES  := $(wildcard $(ARM7_SOURCES)/*.c)
-RUNNER_CFILES := $(addprefix $(RUNNER_SRC)/,$(RUNNER_CORE))
-BANNER       := $(DATA)/banner.bin
-
-# Object files
-OFILES_ARM9  := $(CFILES:$(SOURCES)/%.c=$(BUILD)/%.o) $(SFILES:$(SOURCES)/%.s=$(BUILD)/%.o) \
-                $(RUNNER_CFILES:$(RUNNER_SRC)/%.c=$(BUILD)/%.o)
-OFILES_ARM7  := $(ARM7_CFILES:$(ARM7_SOURCES)/%.c=$(BUILD)/arm7/%.o)
-
-# Runner dependencies are generated by the same -MMD path below.
-
-# Output files
-ELF_ARM9     := $(BUILD)/$(TARGET).arm9.elf
-ELF_ARM7     := $(BUILD)/$(TARGET).arm7.elf
-NDS_ROM      := $(BUILD)/$(TARGET).nds
-
-.PHONY: all clean setup lint format test check
-
-all: $(NDS_ROM)
-
-$(NDS_ROM): $(ELF_ARM9) $(ELF_ARM7) $(BANNER)
-	@echo "Packaging NDS: $(notdir $@)"
-	@$(TOOLRUN) $(NDSTOOL) -c $@ -9 $(ELF_ARM9) -7 $(ELF_ARM7) -t $(BANNER)
-	@echo "BUILD SUCCESS! $(notdir $@) created."
-
-$(ELF_ARM9): $(OFILES_ARM9)
-	@echo "Linking ARM9: $(notdir $@)"
-	@$(TOOLRUN) $(LD) $(LDFLAGS) $^ $(LIBS) -o $@
-
-$(ELF_ARM7): $(OFILES_ARM7)
-	@echo "Linking ARM7: $(notdir $@)"
-	@$(TOOLRUN) $(LD) $(ARM7_LDFLAGS) $^ $(ARM7_LIBS) -o $@
-
-# ARM9 compilation
-$(BUILD)/%.o: $(SOURCES)/%.c
-	@mkdir -p $(dir $@)
-	@$(TOOLRUN) $(CC) $(CFLAGS) -MMD -MP -c $< -o $@
-
-$(BUILD)/%.o: $(SOURCES)/%.s
-	@mkdir -p $(dir $@)
-	@$(TOOLRUN) $(CC) $(ASFLAGS) -c $< -o $@
-
-# Runner core compilation (mirrored paths: extern/snesrecomp/runner/src/x.c -> build/x.o)
-$(BUILD)/%.o: $(RUNNER_SRC)/%.c
-	@mkdir -p $(dir $@)
-	@$(TOOLRUN) $(CC) $(CFLAGS) -MMD -MP -c $< -o $@
-
-# ARM7 compilation
-$(BUILD)/arm7/%.o: $(ARM7_SOURCES)/%.c
-	@mkdir -p $(dir $@)
-	@$(TOOLRUN) $(CC) $(ARM7_CFLAGS) -MMD -MP -c $< -o $@
-
-# Dependencies
--include $(OFILES_ARM9:.o=.d)
--include $(OFILES_ARM7:.o=.d)
-
-clean:
-	@echo "Cleaning..."
-	@rm -fr $(BUILD)
-
-setup:
-	@echo "Toolchain: $(TOOLCHAIN_ENV)"
-ifeq ($(TOOLCHAIN_ENV),none)
-	@echo "ERROR: no devkitARM toolchain and no usable Docker." >&2
-	@echo "  expected: $(DEVKITPRO)/devkitARM/bin/arm-none-eabi-gcc on this host," >&2
-	@echo "            or 'docker' on PATH with image $(CONTAINER)" >&2
-	@echo "  found:    neither" >&2
-	@echo "  fix: install devkitPro, or run with DOCKER=1 on a host that has it." >&2
-	@exit 1
-endif
-ifeq ($(TOOLCHAIN_ENV),container)
-	@echo "Using container $(CONTAINER) (no native devkitARM found)"
-	@docker image inspect $(CONTAINER) >/dev/null 2>&1 || \
-		(echo "ERROR: image $(CONTAINER) not present locally. Pull it first:" >&2; \
-		 echo "  docker pull $(CONTAINER)" >&2; exit 1)
-	@$(CC) --version >/dev/null 2>&1 || true
-	@echo "Container toolchain reachable"
-else
-	@echo "Using native devkitARM at $(DEVKITARM)"
-	@test -x "$(CC)" || (echo "ERROR: $(CC) not executable" >&2; exit 1)
-endif
-
-# cppcheck is the only static gate that runs without the ARM toolchain, so it
-# is the one that must not silently no-op. It fails if the tool is missing.
-lint: setup
-ifeq ($(TOOLCHAIN_ENV),container)
-	@echo "Running cppcheck in $(CONTAINER)..."
-	@$(TOOLRUN) sh -c 'cppcheck --enable=all --std=c11 --error-exitcode=1 \
-		--suppress=missingIncludeSystem --suppress=unusedFunction \
-		--suppress=missingIncludeSystem -I include -I ds/include src include' \
-		|| (echo "LINT FAILED (cppcheck reported findings, or crashed)" >&2; exit 1)
-else ifeq ($(HAVE_CPPCHECK),yes)
-	@echo "Running cppcheck..."
-	@cppcheck --enable=all --std=c11 --error-exitcode=1 \
-		--suppress=missingIncludeSystem --suppress=unusedFunction \
-		-I include -I ds/include src include \
-		|| (echo "LINT FAILED (cppcheck reported findings)" >&2; exit 1)
-else
-	@echo "LINT FAILED: cppcheck not installed." >&2
-	@echo "  expected: cppcheck on PATH" >&2
-	@echo "  fix:      apt install cppcheck, or run with DOCKER=1." >&2
-	@exit 1
-endif
-	@echo "LINT OK"
-
-format:
-	@echo "Checking formatting with clang-format..."
-	@if [ "$(HAVE_CLANGFMT)" = yes ]; then \
-		find $(SOURCES) $(INCLUDES) -name '*.c' -o -name '*.h' | xargs clang-format --dry-run -Werror \
-		|| (echo "FORMAT FAILED: files differ from clang-format output" >&2; exit 1); \
-		echo "FORMAT OK"; \
-	else \
-		echo "FORMAT SKIPPED: clang-format not installed (not a gate)"; \
+# `prepare` is the reproducibility contract: upstream is read-only, so nothing
+# is patched in place. Today the patch chain is EMPTY because every change so
+# far lives in frontend/3ds and platform/3ds. When it stops being empty, the
+# patches apply to a writable mirror at $(GEN_DIR)/../upstream-work.
+prepare: upstream-check
+	@echo "==> Patch chain: $$(ls -1 patches/*.patch 2>/dev/null | wc -l) patches"
+	@if [ -z "$$(ls patches/*.patch 2>/dev/null)" ]; then \
+		echo "    (empty — upstream is used unmodified, which is the intended state)"; \
 	fi
 
-# melonDS is not present in the devkitPro image and there is no headless ROM
-# assertion harness yet. This target therefore reports UNAVAILABLE and fails,
-# rather than reporting success for a test that never ran.
-test: $(NDS_ROM)
-	@echo "Testing on melonDS (headless)..."
-ifeq ($(HAVE_MELONDS),yes)
-	@melonDS $(NDS_ROM) --headless || (echo "TEST FAILED: melonDS exited non-zero" >&2; exit 1)
-	@echo "TEST OK"
-else
-	@echo "TEST UNAVAILABLE: melonDS not installed." >&2
-	@echo "  There is no automated ROM assertion harness in this tree, so" >&2
-	@echo "  'make test' cannot currently prove anything about $(notdir $(NDS_ROM))." >&2
-	@echo "  fix: install melonDS, or add a harness under tests/." >&2
-	@exit 1
-endif
+upstream-check:
+	@if [ ! -d "$(UPSTREAM)" ]; then \
+		echo "UPSTREAM not found at $(UPSTREAM)"; \
+		echo "See 'make setup' for the clone command."; exit 1; \
+	fi
+	@v=$$(cat $(UPSTREAM)/VERSION 2>/dev/null); \
+	 echo "==> upstream VERSION: $$v (expected $(UPSTREAM_REF:0.3.}=$(UPSTREAM_REF)))"; \
+	 case "$$v" in \
+	   0.3.11) ;; \
+	   *) echo "WARNING: upstream is v$$v, not the pinned $(UPSTREAM_REF)."; \
+	      echo "         Read docs/3DS-PORT-STUDY.md before changing the pin." ;; \
+	 esac
 
-check: setup all lint
+# ── Size ──────────────────────────────────────────────────────────────────
+
+size: build
+	@ls -la build3ds/*.3dsx build3ds/*.elf 2>/dev/null || echo "No artifact. Run 'make build'."
+	@echo "NOTE: cartridge headroom for 3DSX homebrew is ~128 MB, so a size"
+	@echo "      problem here is a compile-time problem, not a fit problem."
+
+# ── Quality gates ─────────────────────────────────────────────────────────
+# `lint` runs cppcheck over THIS repository only. It deliberately does not walk
+# $(UPSTREAM): those sources are read-only, vendored verbatim, and are upstream's
+# to lint. The DS-era `make lint` reported 8 findings on a file it could not
+# model, which is noise that trains people to ignore the gate.
+lint:
+	@docker run --rm -v "$(WORK_DIR):/work" -w /work $(DOCKER_IMAGE) \
+		bash -c 'cppcheck --enable=warning,style --std=c11 --error-exitcode=1 \
+			--suppress=missingIncludeSystem --quiet \
+			-I frontend/3ds -I platform/3ds \
+			frontend platform 2>&1' && echo "==> lint: clean"
+
+# `test` builds and then runs the emulator gate. A build alone is not a test:
+# the DS era's `test` target depended on the .nds and called that coverage.
+test: docker-build
+	@$(MAKE) --no-print-directory emulator-headless
+
+emulator-headless:
+	@AZAHAR="$(AZAHAR)" bash scripts/gate-headless.sh build3ds/supermetroid3ds.3dsx 120
+
+check: upstream-check lint build
+
+# ── Environment ───────────────────────────────────────────────────────────
+
+doctor:
+	@echo "=== Docker ==="; docker --version 2>&1 || echo "  NOT INSTALLED"
+	@echo "=== devkitPro image ==="; \
+	  docker images -q $(DOCKER_IMAGE) >/dev/null 2>&1 && echo "  OK" || echo "  MISSING (make setup)"
+	@echo "=== Upstream (read-only) ==="
+	@if [ -d "$(UPSTREAM)" ]; then \
+		echo "  OK: $(UPSTREAM)"; \
+		echo "  VERSION: $$(cat $(UPSTREAM)/VERSION 2>/dev/null)"; \
+		echo "  dirty files: $$(cd $(UPSTREAM) && git status --porcelain | wc -l) (must be 0)"; \
+	else echo "  MISSING: $(UPSTREAM)"; fi
+	@echo "=== ROM ==="
+	@if [ -f "$(ROM_PATH)" ]; then \
+		echo "  Found: $(ROM_PATH)"; \
+		echo "  sha256: $$(sha256sum $(ROM_PATH) | cut -d' ' -f1)"; \
+		echo "  expected: $$(grep expected_sha256 $(UPSTREAM)/rom_identity.txt 2>/dev/null | awk '{print $$3}')"; \
+	else echo "  MISSING: $(ROM_PATH)"; fi
+	@echo "=== Generated core ==="
+	@echo "  GEN_DIR: $(GEN_DIR)"; \
+	 echo "  units: $$(ls -1 $(GEN_DIR)/*.c 2>/dev/null | wc -l) (expect 0 until 'make regen')"
+	@echo "=== Emulator ==="
+	@if [ -x "$(AZAHAR)" ]; then echo "  OK: $(AZAHAR)"; else echo "  MISSING: $(AZAHAR)"; fi
+	@command -v xvfb-run >/dev/null 2>&1 && echo "  OK: xvfb-run" || echo "  MISSING: xvfb-run"
+	@echo "=== Port allocation (must not collide with SimCity-3DS-Port) ==="
+	@echo "  command protocol: $(SM_DBG_PORT)   (SimCity owns 5002)"
+	@echo "  GDB RSP:         $(SM_GDB_PORT)"
+
+setup:
+	@echo "1) Fetch the read-only upstream at $(UPSTREAM_REF):"
+	@echo "   git clone --recurse-submodules https://github.com/mstan/SuperMetroidRecomp.git $(UPSTREAM)"
+	@echo "   cd $(UPSTREAM) && git checkout $(UPSTREAM_REF)"
+	@echo
+	@echo "2) Pull the devkitPro image (3DS toolchain is already inside it):"
+	@echo "   docker pull $(DOCKER_IMAGE)"
+	@echo
+	@echo "3) Place a legally obtained Super Metroid (Japan, USA) .sfc at:"
+	@echo "   $(ROM_PATH)"
+	@echo "   expected sha256: $$(grep expected_sha256 $(UPSTREAM)/rom_identity.txt 2>/dev/null | awk '{print $$3}')"
+	@echo
+	@echo "4) Install Azahar for the headless behavioural gate (see README)."
+
+clean:
+	rm -rf build3ds/ objs3ds/ *.nds *.3dsx *.elf

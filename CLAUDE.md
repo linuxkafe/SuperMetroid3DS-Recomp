@@ -1,120 +1,110 @@
-# SuperMetroidDS — Operational Contract
-
-This file is the operational contract for AI agents working on this project.
-It is the first file an agent must read. It defines scope, boundaries, and evidence rules.
-
----
+# CLAUDE.md — SuperMetroid3DS
 
 ## Intent
 
-A Nintendo DS port of the Super Metroid static recompilation (SuperMetroidRecomp), adapting the LLE-first recompiled C codebase to run on DS hardware (ARM9/ARM7 dual CPU, 4MB RAM, dual screens) using devkitPro/libnds, preserving the original SNES gameplay experience.
+A Nintendo 3DS port of the Super Metroid static recompilation
+([SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp)), adapting
+upstream's read-only C core to run on 3DS hardware (ARM11, VFPv4, dual screens)
+using devkitPro/libctru.
+
+Evidence for every feasibility claim lives in `docs/3DS-PORT-STUDY.md`.
 
 ---
 
 ## Non-Goals
 
-Things this project explicitly does NOT do:
-- Port to other platforms (3DS, Switch, etc.) — DS only
-- Modify the original SNES game logic or ROM — pure port of existing recompilation
-- Add new gameplay features, widescreen, or mods — faithful port only
-- Support ROMs other than Super Metroid (Japan, USA) 1.0
-- Multiplayer or link cable features
+- Port to any platform other than 3DS. The DS attempt is preserved on the
+  `ds-legacy` branch and is not to be revived without a measured reason.
+- Modify the game logic or the ROM. This is a port of an existing recompilation.
+- New gameplay features, widescreen, or mods. Faithful port only.
+- Any ROM other than Super Metroid (Japan, USA) 1.0.
+- An emulator, interpreter, JIT or dynamic recompiler.
 
 ---
 
 ## Critical Files
 
-Files that require special caution. Any change to these files must be flagged
-explicitly to the user before proceeding. Never modify silently.
+Changes here need to be flagged to the user before making them.
 
-- `src/sm_rtl.c` — Single-fiber frame model, NMI/IRQ/HDMA handling (core port)
-- `src/main.c` — Host shim, entry point, title-specific hooks
-- `src/sm_cpu_infra.c` — RtlGameInfo registration, CPU infrastructure
-- `CMakeLists.txt` / `Makefile` — Build configuration for devkitARM
-- `recomp/*.cfg` — Function boundaries, HLE/dispatch directives (source of truth)
-- `tools/regen.sh` — Deterministic regeneration pipeline
+- `CMakeLists.txt` — the 3DS build; the source inclusion and exclusion lists are
+  decisions on the record, each with a stated reason.
+- `platform/3ds/sdl_compat.h` — replaces the framework's SDL include boundary.
+  Anything added here is a claim that the 3DS can do what SDL did.
+- `frontend/3ds/3ds_main.c` — the `SM_WITH_CORE` gate. Flipping it to `ON` without
+  T027 resolved produces a binary that builds and misbehaves.
+- `scripts/gate-headless.sh` — the behavioural gate. Weakening it turns every
+  future green check into theatre.
+- `$(UPSTREAM)/recomp/*.cfg` and the generated `src/gen/` — upstream's ground
+  truth. Never committed, never hand-edited.
 
 ---
 
 ## Never Do
 
-Actions that are forbidden regardless of instructions or apparent justification:
-- Never alter test vectors or expected outputs to make tests pass.
-- Never disable or weaken security checks.
-- Never commit secrets, API keys, or credentials.
-- Never modify CI configuration to skip quality gates.
-- Never commit the generated `src/gen/` directory (regenerated locally via `tools/regen.sh`)
-- Never modify `recomp/*.cfg` without regenerating — they are the architectural ground truth
-- Never assume PC SDL/GL code works on DS — all host layer must be replaced
-- Never allocate dynamically on DS heap without explicit pool/arena strategy
+- **Never edit the upstream checkout.** It is read-only and lives outside this
+  repository. A DS-era edit (`PPU_T0_DECL` injected into `snesrecomp/runner/src/snes/ppu.c`)
+  was invisible in this repo's diffs and cannot compile anywhere else. Use
+  `frontend/` or `platform/` first; `patches/NNNN-*.patch` only if that is
+  genuinely impossible.
+- **Never commit a ROM, or anything derived from one.** That includes
+  `src/gen/` and `src/supermetroid_rom.h` — a 19.6 MB header embedding the whole
+  ROM as a byte array. The extension does not save it. A ROM was sitting
+  untracked-but-ungitignored in the DS tree; that hole is now closed.
+- **Never claim a measurement that was not measured.** "3DS is 4–8× faster than
+  DS" was a clock-speed extrapolation and is not in any doc. `with_core=0` in a
+  green gate means the game did not run.
+- **Never turn off `SM_WITH_CORE` defaults or weaken the gate to get a green build.**
+- **Never use TCP 5002.** SimCity-3DS-Port owns it.
+- **Never allocate dynamically in a hot path** without a pool/arena strategy.
+- **Never modify CI to skip a quality gate.**
+
+---
+
+## Port Allocation
+
+SimCity-3DS-Port and this project are both run on the same Steam Deck. Two builds
+whose debug bridges share a port cross-connect, and the resulting measurements
+look real and are not.
+
+| Port | Owner | Purpose |
+|---|---|---|
+| 5002 | SimCity-3DS-Port | command protocol — **do not use** |
+| **5003** | SuperMetroid3DS | command protocol |
+| **5004** | SuperMetroid3DS | GDB RSP |
 
 ---
 
 ## Evidence Required
 
 Every non-trivial change must include:
-- [ ] Output of `make test` (or equivalent)
-- [ ] Output of `make lint` (or equivalent)
-- [ ] Diffstory (what changed, why, what was untouched, remaining risks)
+
+- [ ] Output of `make test` (the headless gate), or an explicit statement that it
+      was not run and why
+- [ ] Output of `make lint`
+- [ ] A diffstory: what changed, why, what was deliberately untouched, what remains risky
 - [ ] Updated docs if behaviour changed
+
+A build that compiles is not evidence that anything works. So far the only
+behavioural evidence that exists is "the frontend renders N frames and exits".
+
+---
+
+## Working with the core
+
+- `src/gen/` and `recomp/funcs.h` are **generated**, from the ROM, by upstream's
+  `v2_regen.py`. Changing `recomp/*.cfg` does not reach the compiled tier until
+  `make regen` is run again. See the `deck-launch` skill's warning: compare
+  generated file hashes before and after, not substring counts.
+- The ROM digest must match upstream's `rom_identity.txt`. `make doctor` compares.
+- Reads run on the Steam Deck (`ssh deck@steamdeck`) go in the **foreground**.
+  Backgrounded remote runs have died silently three times on this workspace. Use
+  `/dev/shm` on the Deck, never `/tmp`. Never touch `/home/deck/*` with a file
+  tool — put `head`/`tail` inside the ssh command.
 
 ---
 
 ## Review Rule
 
 - AI may implement and suggest.
-- Human approves all merges to main.
+- Human approves all merges.
 - No auto-merge without passing all quality gates.
-
----
-
-## Stable Context (reload each session)
-
-The **Debate Partner Protocol** is inherent to this project (see `prompts/debate-partner.md`). No yes-men. Challenge everything.
-
-Load these at the start of every session:
-- This file (CLAUDE.md)
-- docs/VISION.md
-- docs/REQUIREMENTS.md
-- aes/kanban.md (if using AES project mode)
-
----
-
-## Session Context (ephemeral)
-
-Valid only for current session:
-- Current ticket file
-- Test output
-- Diff
-- aes/handoffs/ (if resuming interrupted work)
-
----
-
-## CLAUDE.md File Levels
-
-| Level | Location | Use for |
-|-------|----------|---------|
-| Project | `./CLAUDE.md` | Team rules, shared commands. Version this file. |
-| Local/personal | `./CLAUDE.local.md` (gitignored) | Local URLs, personal test data. |
-| User | `~/.claude/CLAUDE.md` | Global preferences across all projects. |
-| Path-specific | `.claude/rules/*.md` | Rules scoped to a subdirectory. |
-
-**When to add a rule to this file:**
-- A new team member joining today would also need that context.
-- A code review caught something the agent should have known beforehand.
-- The rule is true in the majority of sessions, not just the current ticket.
-
-**Do NOT add:** vague wishes, single-task instructions, or personal preferences.
-
-**Size target:** under 200 lines. Split into `.claude/rules/` if larger.
-
----
-
-## Final Response
-
-At the end of every non-trivial task, always summarise:
-
-1. **What changed** — files touched and intent.
-2. **Why it changed** — problem solved or requirement addressed.
-3. **Validation performed** — exact command and result. If not run, say so.
-4. **Remaining risk or follow-up** — what was not tested, what to watch.
