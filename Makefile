@@ -12,7 +12,20 @@ UPSTREAM     ?= /home/seyon/dev/Games/PC/SuperMetroidRecomp
 UPSTREAM_REF ?= v0.3.11
 
 # Generated core output: ~88 MB of C derived from the ROM. Never committed.
-GEN_DIR      ?= /home/seyon/dev/Games/PC/SuperMetroid3DS-build/gen
+#
+# The regen tool writes into the tree it is run from, so it runs in a writable
+# WORKTREE — a copy of the read-only upstream. The generated files land in
+# WORKTREE/src/gen and WORKTREE/recomp/funcs.h, and GEN_DIR points at the
+# former so the build picks them up without touching the upstream checkout.
+WORKTREE    ?= $(UPSTREAM)-work
+GEN_DIR      ?= $(WORKTREE)/src/gen
+
+# The analyzer is a Rust crate (recompiler-rs, Rust 1.85) with no toolchain on
+# this host. It is built once into $(ANALYZER) in a Rust container, and regen
+# points at it via SNESRECOMP_NATIVE_ANALYZER — the prebuilt-artifact path the
+# tooling supports, rather than the --analysis-backend flag that was retired.
+ANALYZER    ?= /home/seyon/dev/Games/PC/SuperMetroid3DS-build/analyze/snesrecomp-analyze
+RUST_IMAGE  ?= rust:1.85-slim
 
 # The user's own legally obtained ROM. Not committed, not redistributed.
 ROM_PATH     ?= $(CURDIR)/SuperMetroid-usa.sfc
@@ -79,13 +92,26 @@ regen:
 		echo "The expected sha256 is in \$$UPSTREAM/rom_identity.txt."; \
 		exit 1; \
 	fi
-	@mkdir -p "$(GEN_DIR)"
-	cd $(UPSTREAM) && python3 snesrecomp/tools/v2_regen.py \
-		--rom "$(ROM_PATH)" \
-		--cfg-dir recomp \
-		--out-dir "$(GEN_DIR)" \
-		--jobs $(shell nproc)
+	@if [ ! -d "$(WORKTREE)" ]; then \
+		echo "==> Creating worktree copy of the read-only upstream at $(WORKTREE)"; \
+		cp -a "$(UPSTREAM)" "$(WORKTREE)"; \
+	fi
+	@echo "==> Regenerating src/gen + recomp/funcs.h in $(WORKTREE)"
+	@SNESRECOMP_NATIVE_ANALYZER="$(ANALYZER)" \
+		cd $(WORKTREE) && SNESRECOMP_ROM="$(ROM_PATH)" \
+		bash tools/regen.sh --rom "$(ROM_PATH)" --strict-idempotent
 	@echo "==> Generated: $$(ls -1 $(GEN_DIR)/*.c 2>/dev/null | wc -l) translation units"
+
+# Build the native analyzer, which regen needs. Idempotent — the binary is
+# cached and regen points at it, so this only runs when $(ANALYZER) is missing.
+analyze:
+	@if [ -x "$(ANALYZER)" ]; then \
+		echo "==> analyzer already built: $(ANALYZER)"; exit 0; fi
+	@mkdir -p $$(dirname "$(ANALYZER)")
+	@docker run --rm -v "$(UPSTREAM):/src:ro" -v "$(PWD)/SuperMetroid3DS-build:/out" $(RUST_IMAGE) \
+		bash -c 'rm -rf /work && mkdir -p /work && cp -a /src/snesrecomp/recompiler-rs /work/recompiler-rs && \
+			cd /work/recompiler-rs && cargo build --release && \
+			mkdir -p /out/analyze && cp target/release/snesrecomp-analyze /out/analyze/'
 
 # `prepare` is the reproducibility contract: upstream is read-only, so nothing
 # is patched in place. Today the patch chain is EMPTY because every change so

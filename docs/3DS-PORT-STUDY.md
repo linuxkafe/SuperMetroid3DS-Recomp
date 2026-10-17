@@ -84,7 +84,7 @@ arm-none-eabi-gcc -fsyntax-only -mcpu=mpcore -march=armv6k \
 | File | Cause | Resolution |
 |---|---|---|
 | `common_rtl.c` | `desktop/sdl_compat.h` → `<SDL.h>` | `platform/3ds/sdl_compat.h` (this repo) |
-| `src/sm_rtl.c` | `funcs.h` not generated | run `make regen` (also produces `src/gen`) |
+| `src/sm_rtl.c` | `funcs.h` not generated | `make regen` (also produces `src/gen`) |
 | `keybinds.c` | `<SDL.h>` | excluded — SDL keyboard |
 | `snes_osd.c` | `<SDL.h>` | excluded — SDL text rendering |
 | `snes_savestate_menu.c` | `<SDL.h>` | excluded — SDL menu |
@@ -106,23 +106,85 @@ which is what makes the port allocation of 5003/5004 reachable. `debug_server.c`
 is held back for a different and weaker reason — it is a host debugging surface,
 not part of a shipping port, and `socInit` ownership belongs to the frontend.
 
+### A second retraction — the regen entry point
+
+The regen command recorded here ran `snesrecomp/tools/v2_regen.py` directly.
+**That is not the supported entry point.** It emits nothing when the generated
+code needs stubs for unresolved dispatches — the tooling refuses with
+*"Stubs are a hard build error. Close the recompiler-level gap that produced
+each marker; do NOT add an allowlist."* — and the run produced **zero** files
+after ~25 minutes before dying.
+
+The supported entry point is `tools/regen.sh`, which wraps `snesrecomp_cli.py
+generate` with `--funcs-h recomp/funcs.h`, the ROM digest check, and the
+`--cfg-roots` / `--strict-idempotent` flags that make the output reproducible.
+`make regen` now uses it.
+
+It also writes into the tree it is run from, so it runs in a writable
+`$(WORKTREE)` — a copy of the read-only upstream — leaving upstream untouched.
+
 ---
 
-## Measured: generated core size
+## Measured: generated core size (T025 — done)
+
+**Measured, not extrapolated.** All 337 generated units compile for
+`armv6k/fpu` with zero errors.
 
 | Quantity | Value |
 |---|---|
-| `src/gen/*.c` translation units | 116 |
-| Total generated C | 87,638,842 bytes (~83.5 MiB) |
-| `bank00_v2.c` (2.8 MB C) compiled to | 908,424 bytes `.o` |
-| Time for that one file | ~15 s |
+| `src/gen/*.c` translation units | **337** |
+| Total generated C | **209,614,072 bytes** (~199.9 MiB) |
+| Total object code | **43,769,028 bytes** (~41.7 MiB) |
+| Largest single unit | `dispatch_v2.o` — 921,456 bytes |
+| Next largest | `bank94_v2.o` — 893,348 bytes |
+| Compile time (337 units, ~8 parallel) | ~8 minutes |
+| Failures | **0** |
 
-**Extrapolation, not measurement:** at roughly the same C→object ratio, all 116
-units land near 28 MB of object code. Against 64 MB of app RAM that is a fit.
+**The earlier figure was wrong.** This document previously claimed "near 28 MB",
+extrapolated from **one** bank. The real total is **41.7 MB — 50% higher**. The
+extrapolation was not merely imprecise; it was optimistic in the wrong
+direction, and it was the kind of number that gets quoted as fact. It is now
+replaced.
 
-Treat the 28 MB as provisional. It rests on **one** bank, and the ratio is not
-constant — a bank's object size depends on its mix of code and constant tables.
-T025 exists to compile all 116 and replace this estimate with a number.
+Two reasons the extrapolation failed, both worth remembering:
+
+1. **The v0.3.11 tooling shards differently.** The old v0.3.8 checkout had 116
+   units totalling 87.6 MB of C. The regenerated tree has **337** units totalling
+   **200 MB**. Comparing generated trees across versions by unit count is
+   meaningless — the sharder changed.
+2. **The C→object ratio varies by bank.** `bank00_v2.c` (2.8 MB C → 908 KB
+   `.o`, ratio 0.32) is not representative. `dispatch_v2.o` at 921 KB from a
+   smaller source is the real shape of the data.
+
+### What 41.7 MB means
+
+The 3DS app region is 64 MB, so the raw object code fits with ~22 MB to spare.
+But that is **pre-link**. The frontend's own `.3dsx` was 121 KB with
+`--gc-sections`, and the core's live code after linking will be far smaller than
+41.7 MB. The honest statement is: the core compiles and fits; the *linked* size
+is not yet measured (T032).
+
+### What would falsify this
+
+- A link that exceeds the 64 MB region **before** gc-sections trims it. The
+  frontend link already uses `--gc-sections`, so a pre-link size over 64 MB is
+  not by itself a port failure — but it needs measuring rather than assuming.
+- A unit that fails to compile. There are none today; that is a measurement, not
+  a guarantee.
+
+### The regen that produced this
+
+`make regen` runs `tools/regen.sh` (the supported entry point) in a writable
+`$(WORKTREE)`, pointing at a prebuilt native analyzer via
+`SNESRECOMP_NATIVE_ANALYZER`. Two traps were hit and recorded:
+
+1. `v2_regen.py` directly is **not** the supported entry point — it refuses to
+   emit when generated code needs stubs ("Stubs are a hard build error"), and
+   produced zero files.
+2. The native analyzer is a Rust 1.85 crate and no Rust toolchain exists on this
+   host. It is built once in a Rust container and cached at
+   `SuperMetroid3DS-build/analyze/snesrecomp-analyze`. The retired
+   `--analysis-backend python` flag does not work.
 
 ---
 
