@@ -46,7 +46,62 @@ changed as a result.
   port writes into the emulator's SD root, and prints what it does **not** cover.
 - **Date:** 2026-10-17
 
-## [Evidence] — the emulator does not pass the host environment through
+## [Evidence] — Azahar's SD root is the real SD card on the Deck, not `~/.local/share`
+
+- **Task:** running the headless gate on the Deck
+- **Was believed:** Azahar's SD root is `~/.local/share/azahar-emu/sdmc/` on every host.
+- **Broken by:** `qt-config.ini`. Locally that is true. On the Deck it is
+  `/run/media/mmcblk0p1/Emulation/storage/azahar/sdmc/` — the real SD card.
+  The local path was a **writable temp directory**, so the gate wrote the frame
+  budget there and the port ran with no budget at all, while the gate still
+  passed. That is a gate that passes while doing nothing.
+- **Impact:** would have shipped a green check on the Deck that never started a
+  port. The result file was written to a path the emulator never looked at.
+- **Applied to:** `scripts/gate-headless.sh` selects the SD root by host, and
+  `SDMC` is a Deck path that is written via `ssh`, not locally.
+- **Date:** 2026-10-17
+
+## [Evidence] — a double-quoted ssh string eats backslash line-continuations
+
+- **Task:** the Deck branch of the gate
+- **Was believed:** `\` at the end of a line inside a double-quoted string
+  continues the line.
+- **Broken by:** the gate failing with no result file, while the same command
+  typed by hand worked. The backslashes reached the Deck as literal characters,
+  breaking the guest command. Only visible when the whole thing was reconstructed
+  as one line.
+- **Impact:** a gate that fails on a host where it should pass — and which would
+  have been "fixed" by weakening the assertion rather than the quoting.
+- **Applied to:** the Deck command is one line. The gate records the trap.
+- **Date:** 2026-10-17
+
+## [Process] — the Deck runs Azahar 2127.0-alpha1, not 2126.2
+
+- **Task:** getting the Deck build to start
+- **Was believed:** the Deck and local Azahar were the same build.
+- **Broken by:** `-v`. The Deck AppImage is 2127.0-alpha1 and its default Qt
+  platform is `wayland`, which Azahar cannot load under `ssh` — only `xcb`
+  works, and only with the session's X authority file
+  (`/run/user/1000/xauth_nOhvDY`) passed explicitly. `DISPLAY=:0` alone was not
+  enough.
+- **Impact:** every Deck run failed at "no Qt platform plugin" with no obvious
+  cause, and the failure looked like a port problem rather than an environment
+  one.
+- **Applied to:** `HOST=deck` sets `XAUTHORITY` and `QT_QPA_PLATFORM=xcb`. The
+  local build stays 2126.2 under `xvfb-run`.
+- **Date:** 2026-10-17
+
+## [Evidence] — the Deck's SD root is root-owned at `/run/media`
+
+- **Task:** writing the frame budget from the gate
+- **Was believed:** `mkdir -p "$SDMC"` would work on every host.
+- **Broken by:** `mkdir: cannot create directory '/run/media': Permission denied`.
+  `/run/media` is root-owned, and the SD root already exists.
+- **Impact:** would have made the Deck gate unusable on the host where it is the
+  only gate that matters.
+- **Applied to:** directory creation is local-only; the frame budget is written
+  on the Deck via `ssh`.
+- **Date:** 2026-10-17
 
 - **Task:** making the headless gate deterministic
 - **Was believed:** `SM_MAX_FRAMES=120` on the host command line would reach the

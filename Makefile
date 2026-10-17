@@ -134,7 +134,12 @@ lint:
 test: docker-build
 	@$(MAKE) --no-print-directory emulator-headless
 
+# Defaults to the Deck, which is where this port is actually run. The local
+# Azahar copy is a fallback for quick iteration.
 emulator-headless:
+	@HOST=deck bash scripts/gate-headless.sh build3ds/supermetroid3ds.3dsx 120
+
+emulator-headless-local:
 	@AZAHAR="$(AZAHAR)" bash scripts/gate-headless.sh build3ds/supermetroid3ds.3dsx 120
 
 check: upstream-check lint build
