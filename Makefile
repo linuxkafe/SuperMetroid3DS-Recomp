@@ -50,12 +50,21 @@ AZAHAR       ?= /home/seyon/dev/tools/azahar/usr/bin/azahar
 
 all: docker-build
 
+# SM_WITH_CORE=1 links the recompiled core. Defaults to 0 because running the
+# game also needs host initialisation (T033) that is not done yet; a core-linked
+# build that has not been initialised crashes, and the gate says so rather than
+# pretending the port runs.
+SM_WITH_CORE ?= 0
+
 # ── Build ─────────────────────────────────────────────────────────────────
 
 docker-build:
 	@echo "==> Building SuperMetroid3DS (3DSX) in $(DOCKER_IMAGE)"
+	@echo "    upstream (read-only): $(UPSTREAM)"
+	@echo "    worktree (patches + regen): $(WORKTREE)"
 	docker run --rm \
 		-v "$(UPSTREAM):/upstream:ro" \
+		-v "$(WORKTREE):/worktree" \
 		-v "$(WORK_DIR):/work" \
 		-v "$(GEN_DIR):/gen" \
 		-w /work \
@@ -69,6 +78,7 @@ docker-build:
 				-DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN) \
 				-DCMAKE_BUILD_TYPE=Release \
 				-DUPSTREAM_ROOT=/upstream \
+				-DWORKTREE_ROOT=/worktree \
 				-DGEN_DIR=/gen && \
 			make -j$$(nproc) 2>&1 | tail -60'
 
@@ -97,8 +107,8 @@ regen:
 		cp -a "$(UPSTREAM)" "$(WORKTREE)"; \
 	fi
 	@echo "==> Regenerating src/gen + recomp/funcs.h in $(WORKTREE)"
-	@SNESRECOMP_NATIVE_ANALYZER="$(ANALYZER)" \
-		cd $(WORKTREE) && SNESRECOMP_ROM="$(ROM_PATH)" \
+	@cd $(WORKTREE) && SNESRECOMP_NATIVE_ANALYZER="$(ANALYZER)" \
+ SNESRECOMP_ROM="$(ROM_PATH)" \
 		bash tools/regen.sh --rom "$(ROM_PATH)" --strict-idempotent
 	@echo "==> Generated: $$(ls -1 $(GEN_DIR)/*.c 2>/dev/null | wc -l) translation units"
 
@@ -108,7 +118,7 @@ analyze:
 	@if [ -x "$(ANALYZER)" ]; then \
 		echo "==> analyzer already built: $(ANALYZER)"; exit 0; fi
 	@mkdir -p $$(dirname "$(ANALYZER)")
-	@docker run --rm -v "$(UPSTREAM):/src:ro" -v "$(PWD)/SuperMetroid3DS-build:/out" $(RUST_IMAGE) \
+	@docker run --rm -v "$(UPSTREAM):/src:ro" -v /home/seyon/dev/Games/PC/SuperMetroid3DS-build:/out $(RUST_IMAGE) \
 		bash -c 'rm -rf /work && mkdir -p /work && cp -a /src/snesrecomp/recompiler-rs /work/recompiler-rs && \
 			cd /work/recompiler-rs && cargo build --release && \
 			mkdir -p /out/analyze && cp target/release/snesrecomp-analyze /out/analyze/'

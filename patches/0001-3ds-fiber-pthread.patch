@@ -1,0 +1,33 @@
+--- a/snesrecomp/runner/src/desktop/fiber_compat.c	2026-10-18 08:17:10.799213073 +0100
++++ b/snesrecomp/runner/src/desktop/fiber_compat.c	2026-10-18 08:19:21.516065765 +0100
+@@ -17,7 +17,11 @@
+  * cannot inherit a fix (recomp-ai-rules/PRINCIPLES.md).
+  */
+ #ifndef _WIN32
+-#ifdef __ANDROID__
++#if defined(__ANDROID__) || defined(__SM3DS__)
++
++/* 3DS: no <ucontext.h>, so the ucontext backend does not exist here.
++ * libctru ships pthreads, and the Android backend below is the proven
++ * pthread implementation — it is reused rather than re-derived. */
+ 
+ #include "fiber_compat.h"
+ #include <pthread.h>
+@@ -127,7 +131,7 @@
+     (void)fiber; (void)in; (void)size; return 0;
+ }
+ 
+-#else /* !__ANDROID__: ucontext backend */
++#else /* !__ANDROID__ && !__SM3DS__: ucontext backend */
+ 
+ #define _XOPEN_SOURCE 600   /* expose ucontext on macOS/glibc — must precede includes */
+ 
+@@ -294,7 +298,7 @@
+ 
+ unsigned long GetLastError(void) { return 0; }
+ 
+-#endif /* __ANDROID__ */
++#endif /* __ANDROID__ || __SM3DS__ */
+ #else  /* _WIN32 */
+ 
+ /* A Win32 fiber is an opaque kernel object: its stack extent and saved

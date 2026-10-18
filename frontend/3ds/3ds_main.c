@@ -29,10 +29,9 @@
 #include "3ds_render.h"
 
 #ifdef SM_WITH_CORE
-/* Provided by the core static library (T027). */
-extern void smrecomp_set_pad(uint16_t pad);
-extern void smrecomp_frame_begin(void);
-extern const uint16_t *smrecomp_frame_rgb565(int *out_width, int *out_height);
+/* Provided by platform/3ds/host.c — the host glue between this frontend and
+ * the core library. */
+#include "host.h"
 #endif
 
 /* The SNES composite is 256x224; the test pattern is drawn at that size so the
@@ -40,7 +39,9 @@ extern const uint16_t *smrecomp_frame_rgb565(int *out_width, int *out_height);
 #define TEST_W 256
 #define TEST_H 224
 
+#ifndef SM_WITH_CORE
 static uint16_t s_testFrame[TEST_W * TEST_H] __attribute__((aligned(4)));
+#endif
 
 /*
  * A moving gradient plus a block whose colour is driven by the pad, so input
@@ -48,6 +49,13 @@ static uint16_t s_testFrame[TEST_W * TEST_H] __attribute__((aligned(4)));
  * rectangle: it should be obvious at a glance whether the frame path, the
  * letterbox scaling and the input mapping are all live.
  */
+/*
+ * The test pattern is only drawn when the core is not linked. When it is, the
+ * frame comes from the game and this function is dead — which -Werror flags,
+ * and which is correct: a function that is never called in the shipped build
+ * is dead code, not a fallback.
+ */
+#ifndef SM_WITH_CORE
 static void build_test_frame(uint32_t tick, uint16_t pad) {
     for (int y = 0; y < TEST_H; y++) {
         for (int x = 0; x < TEST_W; x++) {
@@ -69,6 +77,7 @@ static void build_test_frame(uint32_t tick, uint16_t pad) {
         }
     }
 }
+#endif /* !SM_WITH_CORE */
 
 static void report_status(void) {
     printf("\x1b[2;0H");
@@ -188,11 +197,11 @@ int main(int argc, char **argv) {
          * like "the input mapping is broken" on hardware. */
         smrecomp_set_pad(pad);
         smrecomp_frame_begin();
-        int w = 0, h = 0;
-        const uint16_t *px = smrecomp_frame_rgb565(&w, &h);
-        frame.pixels = px;
-        frame.width = w;
-        frame.height = h;
+        if (!smrecomp_frame_rgb565(&frame)) {
+            /* The PPU has not produced a frame: host initialisation (T033) has
+             * not run. Say so rather than presenting a frozen screen. */
+            printf("render: no frame from core (T033 not run)\n");
+        }
 #else
         build_test_frame(tick, pad);
         frame.pixels = s_testFrame;

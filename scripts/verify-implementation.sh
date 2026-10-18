@@ -38,7 +38,11 @@ if [ -z "$TICKET" ]; then
   fi
 fi
 
-NAME_FILE=$(find "$SCRIPT_DIR/aes/tickets" -name "${TICKET}-*.md" 2>/dev/null | head -1)
+# Prefer the ticket definition over its phase outputs. Sorting by name and
+# taking the first used to pick T027-build.md before T027-arm11-fiber-backend.md,
+# which has no acceptance criteria and made the gate report a false pass.
+NAME_FILE=$(find "$SCRIPT_DIR/aes/tickets" -name "${TICKET}-*.md" 2>/dev/null \
+    | grep -vE -- "-(plan|build|verify|learn|review)\.md$" | head -1)
 if [ ! -f "$NAME_FILE" ]; then
   bail "Ticket file not found for $TICKET in aes/tickets/"
 fi

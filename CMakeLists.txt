@@ -42,15 +42,22 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(UPSTREAM_ROOT "" CACHE PATH "Read-only SuperMetroidRecomp checkout (v0.3.11)")
 set(GEN_DIR "" CACHE PATH "Directory holding regenerated src/gen/*.c and funcs.h")
 
-if(NOT UPSTREAM_ROOT)
+# The worktree is where patches/ is applied and where regen writes src/gen and
+# recomp/funcs.h. The build compiles from it rather than from the read-only
+# upstream, because the upstream must stay pristine — the whole point of the
+# patch chain is that it is applied to a writable mirror, not in place.
+set(WORKTREE_ROOT "" CACHE PATH
+    "Writable mirror of the upstream: patches/ applied here, regen output here")
+
+if(NOT WORKTREE_ROOT)
     message(FATAL_ERROR
-        "UPSTREAM_ROOT is not set. Run this through the Makefile, or pass "
-        "-DUPSTREAM_ROOT=/path/to/SuperMetroidRecomp. The upstream checkout is "
-        "deliberately external: it is read-only and must not live in this repo.")
+        "WORKTREE_ROOT is not set. Run this through the Makefile, or pass "
+        "-DWORKTREE_ROOT=/path/to/SuperMetroidRecomp-work. The upstream "
+        "checkout is deliberately external and read-only.")
 endif()
 
-set(SR "${UPSTREAM_ROOT}/snesrecomp/runner/src")
-set(GAME_SRC "${UPSTREAM_ROOT}/src")
+set(SR "${WORKTREE_ROOT}/snesrecomp/runner/src")
+set(GAME_SRC "${WORKTREE_ROOT}/src")
 
 foreach(_req "${SR}" "${GAME_SRC}")
     if(NOT EXISTS "${_req}")
@@ -74,6 +81,7 @@ add_executable(supermetroid3ds
     frontend/3ds/3ds_render.c
     frontend/3ds/3ds_input.c
     frontend/3ds/3ds_audio.c
+    platform/3ds/host.c
 )
 
 target_include_directories(supermetroid3ds PRIVATE frontend/3ds)
@@ -138,12 +146,15 @@ if(SM_WITH_CORE)
         ${SR}/crc32.c
         ${SR}/snapshot_guard.c
         ${SR}/sha256.c
-        ${SR}/keybinds.c              # excluded on 3DS: SDL keyboard
+        # keybinds.c is deliberately NOT built: it is SDL keyboard only, and
+        # the 3DS frontend maps input directly through hidScanInput.
         ${SR}/snes_overlay_draw.c
         ${SR}/snes_runahead.c
-        ${SR}/snes_savestate_menu.c   # excluded on 3DS: SDL menu
+        # snes_savestate_menu.c, snes_osd.c, keybinds.c and host_report.c are
+        # deliberately NOT built. The comments above kept claiming they were
+        # excluded while the files stayed in the list, and each one is SDL-only
+        # or needs a POSIX header the 3DS lacks — they fail to compile.
         ${SR}/netplay/snes_netplay.c
-        ${SR}/snes_osd.c              # excluded on 3DS: SDL text rendering
         ${SR}/snes_rewind.c
         ${SR}/cpu_state.c
         ${SR}/program_module.c
@@ -155,13 +166,19 @@ if(SM_WITH_CORE)
         ${SR}/cpu_trace.c
         ${SR}/audio_trace.c
         ${SR}/ppu_dma_trace.c
-        ${SR}/host_report.c            # excluded on 3DS: needs <sys/utsname.h>
+        # host_report.c is deliberately NOT built: it needs <sys/utsname.h>,
+        # which 3DS newlib lacks.
         ${SR}/execution_mode.c
         ${SR}/mod_audio.c
         ${SR}/host_mesh.c
         ${SR}/host_mesh_builder.c
         ${SR}/guarded_patch.c
         ${SR}/util.c
+        # The cooperative fiber API. This is T027: the framework's fiber_compat.c
+        # compiles to nothing on 3DS because its backends are Win32, ucontext and
+        # pthread, and 3DS has none of those. patches/0001 ORs __SM3DS__ into the
+        # Android pthread branch, which is the only one that works here.
+        ${SR}/desktop/fiber_compat.c
         # --- SNES hardware model (the LLE floor) ---
         ${SR}/snes/apu.c
         ${SR}/snes/cart.c
@@ -218,21 +235,29 @@ if(SM_WITH_CORE)
     # Generated files include "funcs.h" flat, so GEN_DIR goes on the path for
     # both the generated sources and funcs.h itself.
     target_include_directories(smrecomp_core PRIVATE
+        platform/3ds
         ${SR}
         ${SR}/desktop
         ${GAME_SRC}
-        ${UPSTREAM_ROOT}/recomp
+        ${WORKTREE_ROOT}/recomp
         ${GEN_DIR}
-        platform/3ds
     )
-    target_compile_definitions(smrecomp_core PRIVATE SNESRECOMP_ROM_IDENTITY_HEADER="snesrecomp_rom_identity.h")
+    target_compile_definitions(smrecomp_core PRIVATE
+        SNESRECOMP_ROM_IDENTITY_HEADER="snesrecomp_rom_identity.h"
+        __SM3DS__
+    )
 
     target_link_libraries(supermetroid3ds PRIVATE smrecomp_core)
     target_compile_definitions(supermetroid3ds PRIVATE SM_WITH_CORE=1)
 endif()
 
 # ── Link ───────────────────────────────────────────────────────────────────
-target_include_directories(supermetroid3ds PRIVATE ${CTR_INCLUDE_DIR})
+target_include_directories(supermetroid3ds PRIVATE
+    ${CTR_INCLUDE_DIR}
+    platform/3ds
+    ${WORKTREE_ROOT}/snesrecomp/runner/src
+    ${WORKTREE_ROOT}/snesrecomp/runner/src/desktop
+)
 target_link_libraries(supermetroid3ds PRIVATE ${CTRU_LIB} m)
 
 # 3DSX (homebrew) output. No ROM is embedded: the port loads the .sfc from the

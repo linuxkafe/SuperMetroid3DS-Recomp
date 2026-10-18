@@ -1,0 +1,14 @@
+--- a/snesrecomp/runner/src/desktop/config.h	2026-10-18 08:40:00.000000000 +0100
++++ b/snesrecomp/runner/src/desktop/config.h	2026-10-18 08:39:58.641431196 +0100
+@@ -275,5 +275,11 @@
+ // with a surgical, comment-preserving in-place update. Called after the GUI
+ // launcher returns PLAY.
+ void WriteConfigFile(const char *filename);
++#ifdef __SM3DS__
++/* SDL keyboard lookup is desktop-only; the 3DS frontend maps input
++ * directly and never calls this. Guarded rather than stubbed so the
++ * declaration stays available to desktop builds unchanged. */
++#else
+ int FindCmdForSdlKey(SDL_Keycode code, SDL_Keymod mod);
++#endif
+ int FindCmdForGamepadButton(int button, uint32 modifiers);
