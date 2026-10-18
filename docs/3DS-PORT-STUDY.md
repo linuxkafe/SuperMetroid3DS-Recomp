@@ -127,48 +127,46 @@ It also writes into the tree it is run from, so it runs in a writable
 
 ## Measured: generated core size (T025 — done)
 
-**Measured, not extrapolated.** All 337 generated units compile for
+**Measured, not extrapolated.** All 338 generated units compile for
 `armv6k/fpu` with zero errors.
 
 | Quantity | Value |
 |---|---|
-| `src/gen/*.c` translation units | **337** |
+| `src/gen/*.c` translation units | **338** |
 | Total generated C | **209,614,072 bytes** (~199.9 MiB) |
-| Total object code | **43,769,028 bytes** (~41.7 MiB) |
-| Largest single unit | `dispatch_v2.o` — 921,456 bytes |
-| Next largest | `bank94_v2.o` — 893,348 bytes |
-| Compile time (337 units, ~8 parallel) | ~8 minutes |
+| Total object code | **184,173,148 bytes** (~175.6 MiB) |
+| Largest single unit | `bank94_v2.o` — 4,054,904 bytes |
+| Next largest | `bank81_v2.o` — 3,220,076 bytes |
+| Compile time (338 units, ~8 parallel) | ~25 minutes |
 | Failures | **0** |
 
-**The earlier figure was wrong.** This document previously claimed "near 28 MB",
-extrapolated from **one** bank. The real total is **41.7 MB — 50% higher**. The
-extrapolation was not merely imprecise; it was optimistic in the wrong
-direction, and it was the kind of number that gets quoted as fact. It is now
-replaced.
+**The earlier figures were wrong, twice over.**
 
-Two reasons the extrapolation failed, both worth remembering:
+1. This document previously claimed "near 28 MB", extrapolated from **one**
+   bank. The real total is **184 MB — 6.6× higher**. The extrapolation was not
+   merely imprecise; it was optimistic in the wrong direction, and it is the
+   kind of number that gets quoted as fact. Replaced.
+2. The v0.3.8 checkout had 116 units totalling 87.6 MB of C. The regenerated
+   tree has **338** units totalling **200 MB**. Comparing generated trees across
+   versions by unit count is meaningless — the sharder changed.
 
-1. **The v0.3.11 tooling shards differently.** The old v0.3.8 checkout had 116
-   units totalling 87.6 MB of C. The regenerated tree has **337** units totalling
-   **200 MB**. Comparing generated trees across versions by unit count is
-   meaningless — the sharder changed.
-2. **The C→object ratio varies by bank.** `bank00_v2.c` (2.8 MB C → 908 KB
-   `.o`, ratio 0.32) is not representative. `dispatch_v2.o` at 921 KB from a
-   smaller source is the real shape of the data.
+### What 184 MB means
 
-### What 41.7 MB means
+The 3DS app region is 64 MB. **184 MB does not fit.** This is not a port
+failure and not a blocker yet, because:
 
-The 3DS app region is 64 MB, so the raw object code fits with ~22 MB to spare.
-But that is **pre-link**. The frontend's own `.3dsx` was 121 KB with
-`--gc-sections`, and the core's live code after linking will be far smaller than
-41.7 MB. The honest statement is: the core compiles and fits; the *linked* size
-is not yet measured (T032).
+- The frontend link already uses `--gc-sections`, and the live code after
+  linking will be far smaller than the sum of every `.o`.
+- The `.o` sum includes dead and unreferenced code that the linker drops.
+
+But it is a **measured fact that must not be smoothed over**, and it drives
+T032: the linked size after `--gc-sections` is the number that decides whether
+the port fits, and it is not yet measured. If the linked core exceeds 64 MB,
+the port does not fit on 3DS either and the whole retarget is wrong.
 
 ### What would falsify this
 
-- A link that exceeds the 64 MB region **before** gc-sections trims it. The
-  frontend link already uses `--gc-sections`, so a pre-link size over 64 MB is
-  not by itself a port failure — but it needs measuring rather than assuming.
+- A link that exceeds the 64 MB region even after `--gc-sections` (T032).
 - A unit that fails to compile. There are none today; that is a measurement, not
   a guarantee.
 
