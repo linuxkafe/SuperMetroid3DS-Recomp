@@ -70,4 +70,5 @@ debug/net/
 aes-build/
 
 # --- Toolchains --------------------------------------------------------
-devkitpro/build3ds-core/
+build3ds-core/
+devkitpro/
