@@ -6,15 +6,24 @@ A Nintendo 3DS port of **Super Metroid** built via **static recompilation** usin
 
 ---
 
-## Quick Start
+## Status: NOT WORKING YET
 
-### What you need
+**The current build crashes on startup.** Luma crash dump shows:
+- PC=0x07100000 (entry point)
+- Crash occurs before `main()` — during static initialization of the embedded core
+- Root cause: missing fiber shim for 3DS (T027 unresolved)
+
+The test pattern build (`SM_WITH_CORE=0`) runs but only displays a moving gradient test pattern.
+
+---
+
+## What you need
 - A Nintendo 3DS with custom firmware (CFW)
 - Homebrew Launcher (or any `.3dsx` launcher)
 - A legally obtained **Super Metroid (USA or Japan)** ROM file (`.sfc`)
 
-### Installation
-1. Download the latest release from the [FTP server](ftp://10.0.0.130:5000/3ds/SuperMetroid3DS/) or build from source (see below)
+## Installation (for when it works)
+1. Download the latest release or build from source (see below)
 2. Copy the entire `SuperMetroid3DS` folder to your 3DS SD card at:
    ```
    /3ds/SuperMetroid3DS/
@@ -67,20 +76,19 @@ Full feasibility study: [`docs/ROUTE_B_STUDY.md`](docs/ROUTE_B_STUDY.md)
 - A legally obtained Super Metroid ROM (`.sfc`)
 - UPSTREAM_ROOT pointing to a clone of [SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp)
 
-### Build
+### Build (test pattern - works)
 ```bash
-# Clone this repo
-git clone git@github.com:linuxkafe/SuperMetroid3DS-Recomp.git
-cd SuperMetroid3DS-Recomp
-
-# Set upstream path (where SuperMetroidRecomp is cloned)
 export UPSTREAM_ROOT=/path/to/SuperMetroidRecomp
-
-# Build 3DS homebrew
-make docker-build
+make docker-build SM_WITH_CORE=0
 ```
+Output: `build3ds/supermetroid3ds.3dsx` (~180 KB, test pattern only)
 
-Output: `build3ds/supermetroid3ds.3dsx` (core embedded, ~33.9 MB)
+### Build (core embedded - crashes)
+```bash
+export UPSTREAM_ROOT=/path/to/SuperMetroidRecomp
+make docker-build SM_WITH_CORE=1
+```
+Output: `build3ds/supermetroid3ds.3dsx` (~33.9 MB, crashes at entry point)
 
 ### Headless validation (CI)
 ```bash
