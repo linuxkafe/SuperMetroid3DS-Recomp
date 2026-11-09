@@ -127,8 +127,14 @@ static int read_sd_int(const char *name, int fallback) {
  * The guest console is drawn to the bottom screen, which a headless emulator
  * discards — so anything the port wants to tell an automated gate has to leave
  * through the filesystem. This is also the hook a frame hash would grow out of.
+ *
+ * `rom` is the ROM outcome as an integer, not a string, because the gate parses
+ * this file with sed and a path containing spaces would need quoting rules the
+ * reader would then have to get right. The path itself is deliberately NOT
+ * written here: it is the user's filename on their own card, and the gate has
+ * no use for it.
  */
-static void write_gate_result(uint32_t frames, int max_frames) {
+static void write_gate_result(uint32_t frames, int max_frames, int rom_status) {
     FILE *f = fopen("sm_gate_result.txt", "w");
     if (f == NULL) {
         return;
@@ -142,6 +148,7 @@ static void write_gate_result(uint32_t frames, int max_frames) {
             0
 #endif
     );
+    fprintf(f, "rom=%d\n", (int)rom_status);
     fclose(f);
 }
 
@@ -159,6 +166,43 @@ int main(int argc, char **argv) {
          * no audio" rather than "the audio service failed to start". */
         printf("audio init failed; continuing without sound\n");
     }
+
+#ifdef SM_WITH_CORE
+    /*
+     * ROM first, before the frame budget is read and before any frame runs.
+     * Loading it here means a wrong or missing ROM is refused while the screen
+     * still shows the report, instead of half way through a run.
+     *
+     * A failure here does NOT abort: the frontend must still reach the frame
+     * loop and still write its result file, or the gate sees "emulator exited
+     * before writing sm_gate_result.txt" and reports a crash where the truth is
+     * a missing file. The rom= line in the result carries the real reason.
+     *
+     * Pass argv[0] (path to .3dsx) so the ROM loader can search in the same
+     * directory (zelda3 method).
+     */
+    const SmRomStatus rom_status = smrecomp_rom_load(argv[0]);
+    if (rom_status != SMROM_OK) {
+        printf("rom: REFUSED — %s\n", smrecomp_rom_status_text(rom_status));
+    }
+
+    /*
+     * Boot the SNES machine from the loaded ROM. This registers the game,
+     * allocates the guest state, runs the ROM's reset vector up to the first
+     * WaitForNMI yield, and sets up the SPC audio player. Must happen before
+     * any call to smrecomp_frame_begin() or the guest state is garbage and
+     * the first frame crashes.
+     *
+     * A refused ROM does not prevent initialisation — the gate still needs
+     * to render the "rom=refused" result file. SnesInit will itself refuse a
+     * bad image and the gate's rom= line carries the real reason.
+     */
+    if (rom_status == SMROM_OK) {
+        smrecomp_init();
+    }
+#else
+    const int rom_status = 0;
+#endif
 
     /*
      * A fixed frame count makes the process terminate on its own. This exists so
@@ -198,10 +242,14 @@ int main(int argc, char **argv) {
         smrecomp_set_pad(pad);
         smrecomp_frame_begin();
         if (!smrecomp_frame_rgb565(&frame)) {
-            /* The PPU has not produced a frame: host initialisation (T033) has
-             * not run. Say so rather than presenting a frozen screen. */
-            printf("render: no frame from core (T033 not run)\n");
+            /* The PPU has not produced a frame yet — the first frame has not
+             * completed its raster pass. Wait one more loop before giving up;
+             * the title screen may still appear on frame 2. */
+            if (tick > 2) {
+                printf("render: no frame from core after %" PRIu32 " ticks\n", tick);
+            }
         }
+        smrecomp_render_audio();
 #else
         build_test_frame(tick, pad);
         frame.pixels = s_testFrame;
@@ -221,9 +269,18 @@ int main(int argc, char **argv) {
             /* Normal, self-requested termination. The gate keys on this. */
             break;
         }
+
+        /* Pace frames to ~60 Hz. Without this the loop runs as fast as possible
+         * and the game would execute thousands of guest cycles per real second,
+         * exhausting the frame budget in milliseconds and producing no useful
+         * output. The SNES runs at 21.477 MHz NTSC; 60 Hz is the closest
+         * practical target for a headless gate. */
+        const s64 NS_PER_FRAME = 1000000000LL / 60;
+        svcSleepThread(NS_PER_FRAME);
     }
 
-    write_gate_result(tick, max_frames);
+    write_gate_result(tick, max_frames, rom_status);
+    hidExit();
     SmAudioExit();
     SmRenderExit();
     return 0;
