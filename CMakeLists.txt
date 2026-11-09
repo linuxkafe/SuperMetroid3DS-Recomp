@@ -65,6 +65,49 @@ foreach(_req "${SR}" "${GAME_SRC}")
     endif()
 endforeach()
 
+# ── ROM identity header (T033) ─────────────────────────────────────────────
+# Upstream keeps the ROM's expected digests in ONE text file, rom_identity.txt,
+# read by its build, its regen tool and its release workflow. This port needs the
+# same values at compile time so it can refuse a ROM that is not this ROM.
+#
+# It is GENERATED from that file, not written out by hand here. A literal sha256
+# pasted into CMake would be a second source of truth: a ROM revision upstream
+# would update one and silently miss the other, and the port would then refuse a
+# correct ROM or accept a wrong one with no compile-time signal.
+#
+# The generator is upstream's own snesrecomp/tools/rom_identity.py, so the
+# emitted header is byte-identical to the one upstream's CMake emits — which is
+# what keeps the two from drifting.
+set(ROM_IDENTITY "${UPSTREAM_ROOT}/rom_identity.txt")
+set(ROMID_TOOL "${UPSTREAM_ROOT}/snesrecomp/tools/rom_identity.py")
+set(ROM_IDENTITY_DIR "${CMAKE_BINARY_DIR}/romid")
+
+if(NOT EXISTS "${ROM_IDENTITY}" OR NOT EXISTS "${ROMID_TOOL}")
+    message(FATAL_ERROR
+        "ROM identity inputs missing from UPSTREAM_ROOT='${UPSTREAM_ROOT}'. "
+        "Expected rom_identity.txt and snesrecomp/tools/rom_identity.py.")
+endif()
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(NOT Python3_Interpreter_FOUND)
+    message(FATAL_ERROR
+        "python3 is required to generate snesrecomp_rom_identity.h from "
+        "rom_identity.txt. The devkitPro image ships one; a native build needs "
+        "it on PATH.")
+endif()
+
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${ROMID_TOOL}" "${ROM_IDENTITY}"
+            --header "${ROM_IDENTITY_DIR}"
+    RESULT_VARIABLE _romid_rc
+    OUTPUT_VARIABLE _romid_out
+    ERROR_VARIABLE  _romid_err)
+if(NOT _romid_rc EQUAL 0)
+    message(FATAL_ERROR
+        "rom_identity.py failed (${_romid_rc}):\n${_romid_err}")
+endif()
+message(STATUS "ROM identity: ${ROM_IDENTITY_DIR}/snesrecomp_rom_identity.h")
+
 # ── Platform: Nintendo 3DS ─────────────────────────────────────────────────
 if(NOT DEFINED ENV{DEVKITPRO})
     message(FATAL_ERROR "DEVKITPRO is not set. Build through the Makefile (docker-build).")
@@ -76,29 +119,39 @@ if(NOT CTRU_LIB OR NOT CTR_INCLUDE_DIR)
 endif()
 message(STATUS "libctru: ${CTRU_LIB}")
 
-add_executable(supermetroid3ds
-    frontend/3ds/3ds_main.c
-    frontend/3ds/3ds_render.c
-    frontend/3ds/3ds_input.c
-    frontend/3ds/3ds_audio.c
-    platform/3ds/host.c
-)
-
-target_include_directories(supermetroid3ds PRIVATE frontend/3ds)
-target_compile_options(supermetroid3ds PRIVATE -Wall -Wextra -Werror)
-
-# ── The recompiled core ────────────────────────────────────────────────────
-# OPTIONAL. It is off by default because it does not link on 3DS yet: the
-# framework's fiber backend needs <ucontext.h>, which the 3DS newlib
-# environment does not provide. Turning this on without resolving that produces
-# a binary that builds and misbehaves, so it must be asked for explicitly and
-# the request is visible in the configure log.
+# ── Core option (before add_executable so frontend gets correct defs) ────────
 option(SM_WITH_CORE "Link the recompiled core (requires T027: ARM11 fiber backend)" OFF)
 
 if(SM_WITH_CORE AND NOT GEN_DIR)
     message(FATAL_ERROR "SM_WITH_CORE=ON requires -DGEN_DIR pointing at regenerated src/gen.")
 endif()
 
+# ── Frontend (always built; test pattern when core is off) ──────────────────
+add_executable(supermetroid3ds
+    frontend/3ds/3ds_main.c
+    frontend/3ds/3ds_render.c
+    frontend/3ds/3ds_input.c
+    frontend/3ds/3ds_audio.c
+)
+
+if(SM_WITH_CORE)
+    target_sources(supermetroid3ds PRIVATE platform/3ds/host.c)
+endif()
+
+target_include_directories(supermetroid3ds PRIVATE
+    frontend/3ds
+    ${ROM_IDENTITY_DIR}
+)
+target_compile_options(supermetroid3ds PRIVATE -Wall -Wextra -Werror)
+
+# The compile definition must be set immediately after target creation so
+# CMake tracks it for all sources in the target. Doing it later in a separate
+# if() block does not invalidate already-built object files.
+if(SM_WITH_CORE)
+    target_compile_definitions(supermetroid3ds PRIVATE SM_WITH_CORE=1)
+endif()
+
+# ── Recompiled core (optional) ──────────────────────────────────────────────
 if(SM_WITH_CORE)
     message(STATUS "SM core: building from GEN_DIR=${GEN_DIR}")
 
@@ -123,6 +176,9 @@ if(SM_WITH_CORE)
         ${GAME_SRC}/sm_mode7.c        # SM's mode-7 object projection
         ${GAME_SRC}/sm_display.c      # presentation geometry
         ${GAME_SRC}/sm_video.c        # aspect / HUD policy
+        # sm_replay.c excluded: depends on desktop-only replay writer and config
+        # sm_startup.c excluded: depends on host_paths/host_main (desktop-only)
+        # Stubs for SmReplay* are provided in platform/3ds/host.c
         ${GAME_SRC}/gen_stubs.c       # hand-written bodies for hle_func targets
     )
 
@@ -248,7 +304,6 @@ if(SM_WITH_CORE)
     )
 
     target_link_libraries(supermetroid3ds PRIVATE smrecomp_core)
-    target_compile_definitions(supermetroid3ds PRIVATE SM_WITH_CORE=1)
 endif()
 
 # ── Link ───────────────────────────────────────────────────────────────────
@@ -257,6 +312,7 @@ target_include_directories(supermetroid3ds PRIVATE
     platform/3ds
     ${WORKTREE_ROOT}/snesrecomp/runner/src
     ${WORKTREE_ROOT}/snesrecomp/runner/src/desktop
+    ${GAME_SRC}
 )
 target_link_libraries(supermetroid3ds PRIVATE ${CTRU_LIB} m)
 
