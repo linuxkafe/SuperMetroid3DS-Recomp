@@ -6,17 +6,17 @@ A Nintendo 3DS port of **Super Metroid** built via **static recompilation** usin
 
 ---
 
-## Status: RUNNING IN EMULATOR — Crashes on Real Hardware
+## Status: Core Runs in Emulator — Crashes on Real Hardware
 
 | Build | Emulator (Azahar) | Real 3DS |
 |-------|-------------------|----------|
-| Test pattern (`SM_WITH_CORE=0`) | ✅ Works (120+ frames) | ❓ Unknown |
-| Core embedded (`SM_WITH_CORE=1`) | ⚠️ Runs ~60 frames then hangs | ❌ Crashes at entry point |
+| Test pattern (`SM_WITH_CORE=0`) | ✅ Stable, 120+ frames @ 135 fps | ❓ Unknown |
+| Core embedded (`SM_WITH_CORE=1`) | ⚠️ Runs 300+ frames (44-150 sys_fps), game appears to run | ❌ Crashes at entry point |
 
 **Luma Crash Dump (3DS real hardware):**
-- PC = `0x07100000` (entry point)
-- Cause: crash before `main()` during static initialization
-- Root cause: missing fiber shim for 3DS (T027 unresolved)
+- PC = `0x07100000` (entry point before main())
+- Cause: crash during static initialization or early C runtime
+- Root cause: T027 unresolved — missing fiber shim for 3DS
 
 ---
 
@@ -88,7 +88,7 @@ make docker-build SM_WITH_CORE=0
 ```
 Output: `build3ds/supermetroid3ds.3dsx` (~180 KB, test pattern only)
 
-### Build (core embedded - crashes on real 3DS)
+### Build (core embedded - runs in emulator, crashes on real 3DS)
 ```bash
 export UPSTREAM_ROOT=/path/to/SuperMetroidRecomp
 make docker-build SM_WITH_CORE=1
