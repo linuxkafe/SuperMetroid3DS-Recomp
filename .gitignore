@@ -79,3 +79,16 @@ build3ds-local/
 build3ds-core/
 build3ds-local/
 build3ds-test/
+
+# Old NDS project artifacts
+build-nds-old/
+build/
+
+# Redundant 3DS build directories to keep only one location
+build3ds-local/
+build3ds-new/
+build3ds-core-test/
+
+# Review artifacts
+review-queue.json
+review-queue.json.consumed
