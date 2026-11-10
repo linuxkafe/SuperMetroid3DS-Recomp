@@ -74,6 +74,10 @@ Este port utiliza **Route B** — a [decompilação snesrev/sm](https://github.c
 
 Estudo completo: [`docs/ROUTE_B_STUDY.md`](docs/ROUTE_B_STUDY.md)
 
+**Screenshots de demonstração:**
+- [screenshot.png](screenshot.png) — Tela de título (frame 60, ~1.8% non-zero)
+- [screenshot_gameplay.png](screenshot_gameplay.png) — Momento de jogabilidade (frame 1800, ~42% non-zero)
+
 ---
 
 ## Compilar a Partir do Código Fonte
