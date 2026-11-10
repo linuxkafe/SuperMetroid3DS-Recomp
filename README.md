@@ -6,24 +6,29 @@ A Nintendo 3DS port of **Super Metroid** built via **static recompilation** usin
 
 ---
 
-## Status: NOT WORKING YET
+## Status: RUNNING IN EMULATOR — Crashes on Real Hardware
 
-**The current build crashes on startup.** Luma crash dump shows:
-- PC=0x07100000 (entry point)
-- Crash occurs before `main()` — during static initialization of the embedded core
+| Build | Emulator (Azahar) | Real 3DS |
+|-------|-------------------|----------|
+| Test pattern (`SM_WITH_CORE=0`) | ✅ Works (120+ frames) | ❓ Unknown |
+| Core embedded (`SM_WITH_CORE=1`) | ⚠️ Runs ~60 frames then hangs | ❌ Crashes at entry point |
+
+**Luma Crash Dump (3DS real hardware):**
+- PC = `0x07100000` (entry point)
+- Cause: crash before `main()` during static initialization
 - Root cause: missing fiber shim for 3DS (T027 unresolved)
-
-The test pattern build (`SM_WITH_CORE=0`) runs but only displays a moving gradient test pattern.
 
 ---
 
-## What you need
+## Quick Start
+
+### What you need
 - A Nintendo 3DS with custom firmware (CFW)
 - Homebrew Launcher (or any `.3dsx` launcher)
 - A legally obtained **Super Metroid (USA or Japan)** ROM file (`.sfc`)
 
-## Installation (for when it works)
-1. Download the latest release or build from source (see below)
+### Installation
+1. Download the latest release from the [FTP server](ftp://10.0.0.130:5000/3ds/SuperMetroid3DS/) or build from source (see below)
 2. Copy the entire `SuperMetroid3DS` folder to your 3DS SD card at:
    ```
    /3ds/SuperMetroid3DS/
@@ -76,19 +81,19 @@ Full feasibility study: [`docs/ROUTE_B_STUDY.md`](docs/ROUTE_B_STUDY.md)
 - A legally obtained Super Metroid ROM (`.sfc`)
 - UPSTREAM_ROOT pointing to a clone of [SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp)
 
-### Build (test pattern - works)
+### Build (test pattern - works in emulator)
 ```bash
 export UPSTREAM_ROOT=/path/to/SuperMetroidRecomp
 make docker-build SM_WITH_CORE=0
 ```
 Output: `build3ds/supermetroid3ds.3dsx` (~180 KB, test pattern only)
 
-### Build (core embedded - crashes)
+### Build (core embedded - crashes on real 3DS)
 ```bash
 export UPSTREAM_ROOT=/path/to/SuperMetroidRecomp
 make docker-build SM_WITH_CORE=1
 ```
-Output: `build3ds/supermetroid3ds.3dsx` (~33.9 MB, crashes at entry point)
+Output: `build3ds/supermetroid3ds.3dsx` (~33.9 MB, core embedded)
 
 ### Headless validation (CI)
 ```bash
