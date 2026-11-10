@@ -6,166 +6,186 @@ A Nintendo 3DS port of **Super Metroid** built via **static recompilation** usin
 
 ---
 
-## Estado: Funciona no Emulador, Crashes no 3DS Real
+## Status: Works in Emulator, Crashes on Real 3DS Hardware
 
-⚠️ **O jogo NÃO funciona no 3DS real** — crashed na entrada (PC=0x07100000)
+⚠️ **WARNING: The game does NOT work on real 3DS hardware** — crashes at entry point (PC=0x07100000)
 
-| Build | Azahar Emulator | 3DS Hardware |
-|-------|-----------------|--------------|
-| Test pattern (`SM_WITH_CORE=0`) | ✅ Estável (500+ frames, até 450 fps) | ❓ Não testado |
-| Core embedido (`SM_WITH_CORE=1`) | 📊 Funciona (500 frames, 44-217 sys_fps) | ❌ **Crashes no entry point** |
+| Build | Azahar Emulator | Real 3DS |
+|-------|-----------------|----------|
+| Test pattern (`SM_WITH_CORE=0`) | ✅ Stable (500+ frames, up to 450 fps) | ❓ Unknown |
+| Core embedded (`SM_WITH_CORE=1`) | 📊 Works (500 frames, 44-217 sys_fps) | ❌ **Crashes at entry point** |
 
-**Crash Dump 3DS (hardware real):**
-- PC = `0x07100000` (entry point, antes do `main()`)
-- Causa: crash durante inicialização estática ou runtime C
-- Causa raiz: T027 não resolvido — falta *fiber shim* para 3DS (contexto ARM11)
+**Luma Crash Dump (real 3DS hardware):**
+- PC = `0x07100000` (entry point, before `main()`)
+- Cause: crash during static initialization or early C runtime
+- Root cause: T027 unresolved — missing fiber shim for ARM11
 
 ---
 
-## Início Rápido
+## Quick Start
 
-### O que é necessário
-- 3DS com custom firmware (CFW)
-- **Nota Importante:** O jogo **não funciona ainda no hardware 3DS real** (crash na entrada). Funciona no emulador Azahar.
-- Homebrew Launcher (ou qualquer launcher `.3dsx`)
-- ROM **Super Metroid (USA ou Japão)** legalmente obtida (`.sfc`)
+### What you need
+- A Nintendo 3DS with custom firmware (CFW)
+- Homebrew Launcher (or any `.3dsx` launcher)
+- A legally obtained **Super Metroid (USA or Japan)** ROM file (`.sfc`)
 
-### Instalação
-1. Copie a pasta `SuperMetroid3DS` para o cartão SD:
+### Installation
+1. Copy the entire `SuperMetroid3DS` folder to your 3DS SD card at:
    ```
    /3ds/SuperMetroid3DS/
    ```
-2. Coloque o seu ficheiro ROM com um destes nomes:
+2. Place your ROM file in the same folder with **one of these exact names**:
    - `sm.sfc`
    - `SuperMetroid-usa.sfc`
-   
-   O executável verifica automaticamente o SHA-256 do ROM no arranque.
 
-3. Lançar **SuperMetroid3DS** de Homebrew Launcher.
+   The application automatically detects and verifies the ROM on startup.
 
-### Controles
-| Botão 3DS | Ação SNES |
-|-----------|-----------|
-| A         | Saltar    |
-| B         | Disparar / Correr |
-| X         | Selecionar Item |
-| Y         | Cancelar Item |
-| L / R     | Visar Cima / Baixo |
-| Start     | Start     |
-| Select    | Select    |
-| D-Pad     | Movimento |
+3. Launch **SuperMetroid3DS** from Homebrew Launcher.
+
+### Controls
+| 3DS Button | SNES Action |
+|------------|-------------|
+| A          | Jump        |
+| B          | Shoot / Run |
+| X          | Item Select |
+| Y          | Item Cancel |
+| L / R      | Aim Up / Down |
+| Start      | Start       |
+| Select     | Select      |
+| D-Pad      | Movement    |
 
 ---
 
-## Route B: Decompilação snesrev/sm
+## Route B: snesrev/sm Decompilation
 
-Este port utiliza **Route B** — a [decompilação snesrev/sm](https://github.com/snesrev/sm) funcionalmente completa — em vez da pipeline original de recompilação.
+This port uses **Route B** — the [snesrev/sm](https://github.com/snesrev/sm) functionally complete decompilation — instead of the original recompilation pipeline.
 
-### Resultados de Validação
-| Métrica | Valor |
-|---------|-------|
-| Bancos de código | 32 |
-| Funções | 5,671 |
-| Instruções | 132,318 |
-| Tamanho binário (x86_64) | 1.8 MB |
-| Tamanho binário (3DSX, core embedido) | 33.9 MB |
-| Precisão de frames (20,000 frames) | **0 mismatches** |
+### Validation Results
+| Metric | Value |
+|--------|-------|
+| Code banks | 32 |
+| Functions | 5,671 |
+| Instructions | 132,318 |
+| Binary size (x86_64) | 1.8 MB |
+| Binary size (3DSX, core embedded) | 33.9 MB |
+| Frame accuracy (20,000 frames) | **0 mismatches** |
 | PatchBytes workarounds | 90 |
 
-Estudo completo: [`docs/ROUTE_B_STUDY.md`](docs/ROUTE_B_STUDY.md)
+### Screenshots
+- [screenshot.png](screenshot.png) — Title screen (frame 60, ~1.8% non-zero)
+- [screenshot_gameplay.png](screenshot_gameplay.png) — Gameplay (frame 1800, ~42% non-zero)
 
-**Screenshots de demonstração:**
-- [screenshot.png](screenshot.png) — Tela de título (frame 60, ~1.8% non-zero)
-- [screenshot_gameplay.png](screenshot_gameplay.png) — Momento de jogabilidade (frame 1800, ~42% non-zero)
+Full feasibility study: [`docs/ROUTE_B_STUDY.md`](docs/ROUTE_B_STUDY.md)
 
 ---
 
-## Compilar a Partir do Código Fonte
+## Building from Source
 
-### Pré-requisitos
+### Prerequisites
 - Docker / Podman
-- ROM Super Metroid legalmente obtida (`.sfc`)
-- UPSTREAM_ROOT apontando para um clone de [SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp)
+- A legally obtained Super Metroid ROM (`.sfc`)
+- UPSTREAM_ROOT pointing to a clone of [SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp)
+- GEN_DIR pointing to the regenerated core sources
 
-### Build
+### Build Options
 
+| Option | Output | Size | Status |
+|--------|--------|------|--------|
+| `SM_WITH_CORE=0` (default) | `build3ds/supermetroid3ds.3dsx` | ~180 KB | ✅ Stable in emulator |
+| `SM_WITH_CORE=1` | `build3ds/supermetroid3ds.3dsx` | ~33.9 MB | ⚠️ Crashes on real 3DS |
+
+### Build Commands
 ```bash
-# Clonar este repositório
+# Clone this repo
 git clone git@github.com:linuxkafe/SuperMetroid3DS-Recomp.git
 cd SuperMetroid3DS-Recomp
 
-# Definir path upstream (onde está clonado o SuperMetroidRecomp)
+# Set environment
 export UPSTREAM_ROOT=/path/to/SuperMetroidRecomp
+export GEN_DIR=/path/to/SuperMetroidRecomp-work/src/gen
 
 # Build 3DS homebrew
 make docker-build
 ```
 
-**Opções de build:**
-
-| Opção | Output | Tamanho | Estado |
-|-------|--------|---------|--------|
-| `SM_WITH_CORE=0` (default) | `build3ds/supermetroid3ds.3dsx` | ~180 KB | ✅ Estável no emulador |
-| `SM_WITH_CORE=1` | `build3ds/supermetroid3ds.3dsx` | ~33.9 MB | ⚠️ Crashes no 3DS real |
-
-**Performance (Azahar headless - 500 frames testados):**
+### Performance (Azahar headless, 500+ frames tested):
 | Build | sys_fps | emu_speed |
 |-------|---------|-----------|
 | SM_WITH_CORE=0 | 0 / 450 fps | 0.02x - 8.7x |
 | SM_WITH_CORE=1 | 44 / 217 fps | 0.2x - 4.0x |
 
-O core tem desempenho limitado pela falta de otimizações específicas para 3DS.
+The core has limited performance due to lack of 3DS-specific optimizations.
 
-### Validação Headless (CI)
+### Headless Validation (CI)
 ```bash
 make docker-headless-test
 ```
-Executa o harness comparativo — valida 0 mismatches em 20,000 frames.
+Runs the headless comparator harness — validates 0 mismatches over 20,000 frames.
 
 ---
 
-## Estrutura do Projecto
+## Project Structure
 ```
 SuperMetroid3DS-Recomp/
-├── platform/3ds/          # Camada de plataforma 3DS (SDL -> 3DS shim)
-│   ├── host.c             # Carregamento ROM, verificação SHA-256, SnesInit
-│   └── host.h
-├── frontend/3ds/          # Frontend 3DS (input, áudio, render, main)
+├── platform/3ds/          # 3DS platform layer (SDL -> 3DS shim)
+│   ├── host.c             # ROM loading, SHA-256 verification, SnesInit
+│   ├── host.h
+│   ├── fiber_compat.c     # ARM11 fiber implementation (T027)
+│   └── fiber_compat.h
+├── frontend/3ds/          # 3DS frontend (input, audio, render, main)
 │   ├── 3ds_main.c
 │   ├── 3ds_input.c
 │   ├── 3ds_audio.c
 │   └── 3ds_render.c
-├── docs/                  # Documentação
-│   └── ROUTE_B_STUDY.md   # Estudo completo de viabilidade com dados medidos
-├── scripts/               # Scripts de CI / validação
+├── docs/                  # Documentation
+│   └── ROUTE_B_STUDY.md   # Full feasibility study with measured data
+├── scripts/               # CI / validation scripts
 ├── CMakeLists.txt
 ├── Makefile
-└── README.md              # Este ficheiro
+└── README.md              # This file
 ```
 
 ---
 
 ## Legal
 
-Este é um **port não oficial**. Super Metroid é copyright pela Nintendo.
+This is an **unofficial port**. Super Metroid is copyrighted by Nintendo.
 
-**Este repositório contém:**
-- Nenhum ROM, nenhuma imagem ROM, nenhuma cópia de código da Nintendo
-- Nenhum trabalho derivado que incorpore dados do ROM
-- Apenas código shim original de plataforma e automação de build
+**This repository contains:**
+- No ROM, no ROM image, no copy of Nintendo code
+- No derived work that embeds ROM data
+- Only original platform shim code and build automation
 
-**O utilizador deve:**
-- Fornecer um ficheiro ROM Super Metroid `.sfc` legalmente obtido
-- Verificar que o SHA-256 corresponde ao digest esperado (o app o verifica automaticamente)
-- Cumprir as leis locais sobre propriedade de jogos e backups
+**The user must:**
+- Provide their own legally obtained Super Metroid `.sfc` file
+- Verify the SHA-256 matches the expected digest (the app does this automatically)
+- Comply with their local laws regarding game ownership and backups
 
-Upstream: [SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp) — o digest esperado está em `rom_identity.txt`; `make doctor` imprime ambos para verificação.
+Upstream: [SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp) — the expected digest is in upstream's `rom_identity.txt`; `make doctor` prints both for verification.
 
 ---
 
-## Créditos
+## Credits
 
-- **mstan** — SuperMetroidRecomp, snesrecomp, decompilação snesrev/sm
-- **snesrev team** — Decompilação funcionalmente completa de Super Metroid
-- **devkitPro** — toolchain devkitARM e libctru
+- **mstan** — SuperMetroidRecomp, snesrecomp, snesrev/sm decompilation
+- **snesrev team** — Functionally complete Super Metroid decompilation
+- **devkitPro** — devkitARM toolchain and libctru
 - **Super Metroid** — © 1994 Nintendo
+
+---
+
+## Troubleshooting
+
+### Game crashes on real 3DS
+- This is a known issue (T027)
+- The fiber shim for ARM11 context switching is not yet implemented
+- The game works correctly in the Azahar emulator
+
+### ROM not found
+- Ensure the ROM file is named `SuperMetroid-usa.sfc` or `sm.sfc`
+- The ROM must be in the same directory as the `.3dsx` file
+- Verify the ROM SHA-256 matches the expected value
+
+### Build fails with "SM_WITH_CORE=ON requires -DGEN_DIR"
+- Run `make regen` first to generate the core from the ROM
+- Or use the pre-built core from the UPSTREAM_ROOT worktree

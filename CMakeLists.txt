@@ -230,11 +230,10 @@ if(SM_WITH_CORE)
         ${SR}/host_mesh_builder.c
         ${SR}/guarded_patch.c
         ${SR}/util.c
-        # The cooperative fiber API. This is T027: the framework's fiber_compat.c
-        # compiles to nothing on 3DS because its backends are Win32, ucontext and
-        # pthread, and 3DS has none of those. patches/0001 ORs __SM3DS__ into the
-        # Android pthread branch, which is the only one that works here.
-        ${SR}/desktop/fiber_compat.c
+        # The cooperative fiber API. This is T027: implementing fiber switching for
+        # 3DS ARM11. The upstream fiber_compat.c supports Win32, ucontext (macOS),
+        # and pthread (Android) — not 3DS. We provide our own ARM11 implementation.
+        ${CMAKE_CURRENT_SOURCE_DIR}/platform/3ds/fiber_compat.c
         # --- SNES hardware model (the LLE floor) ---
         ${SR}/snes/apu.c
         ${SR}/snes/cart.c
@@ -292,8 +291,8 @@ if(SM_WITH_CORE)
     # both the generated sources and funcs.h itself.
     target_include_directories(smrecomp_core PRIVATE
         platform/3ds
-        ${SR}
         ${SR}/desktop
+        ${SR}
         ${GAME_SRC}
         ${WORKTREE_ROOT}/recomp
         ${GEN_DIR}
