@@ -6,14 +6,24 @@ A Nintendo 3DS port of **Super Metroid** built via **static recompilation** usin
 
 ---
 
-## Status: Works in Emulator, Crashes on Real 3DS Hardware
+## Status: Bring-up Frontend Works, Core Not Linkable
 
 ⚠️ **WARNING: The game does NOT work on real 3DS hardware** — crashes at entry point (PC=0x07100000)
 
 | Build | Azahar Emulator | Real 3DS |
 |-------|-----------------|----------|
-| Test pattern (`SM_WITH_CORE=0`) | ✅ Stable (500+ frames, up to 450 fps) | ❓ Unknown |
-| Core embedded (`SM_WITH_CORE=1`) | 📊 Works (500 frames, 44-217 sys_fps) | ❌ **Crashes at entry point** |
+| Test pattern (`SM_WITH_CORE=0`, default) | ✅ Works (visual pattern, no game) | ❓ Unknown |
+| Core embedded (`SM_WITH_CORE=1`) | ❌ Does NOT work (requires GEN_DIR from ROM regeneration) | ❌ **Crashes at entry point** |
+
+**Current State:**
+- The default `SM_WITH_CORE=0` build is a **bring-up frontend** that shows a test pattern (color gradients with interactive block)
+- This is NOT the actual game - it's used for testing the framebuffer and input path
+- The `SM_WITH_CORE=1` build requires `GEN_DIR` pointing at regenerated source from a legally obtained ROM
+- **T027 blocker**: The ARM11 fiber shim is not implemented, so the core cannot link/run properly on 3DS
+
+**Technical Notes:**
+- Frame accuracy validation: 0 mismatches in 20,000 frames (emulator vs. reference)
+- Test pattern: `sys_fps=0-450` varies by emulator load, shows visual confirmation of rendering pipeline
 
 **Luma Crash Dump (real 3DS hardware):**
 - PC = `0x07100000` (entry point, before `main()`)
@@ -85,14 +95,14 @@ Full feasibility study: [`docs/ROUTE_B_STUDY.md`](docs/ROUTE_B_STUDY.md)
 - Docker / Podman
 - A legally obtained Super Metroid ROM (`.sfc`)
 - UPSTREAM_ROOT pointing to a clone of [SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp)
-- GEN_DIR pointing to the regenerated core sources
+- GEN_DIR pointing to the regenerated core sources (generated via `make regen`)
 
 ### Build Options
 
 | Option | Output | Size | Status |
 |--------|--------|------|--------|
-| `SM_WITH_CORE=0` (default) | `build3ds/supermetroid3ds.3dsx` | ~180 KB | ✅ Stable in emulator |
-| `SM_WITH_CORE=1` | `build3ds/supermetroid3ds.3dsx` | ~33.9 MB | ⚠️ Crashes on real 3DS |
+| `SM_WITH_CORE=0` (default) | `build3ds/supermetroid3ds.3dsx` | ~180 KB | ✅ Bring-up frontend (test pattern only) |
+| `SM_WITH_CORE=1` | `build3ds/supermetroid3ds.3dsx` | ~33.9 MB | ⚠️ Requires GEN_DIR (ROM regeneration) |
 
 ### Build Commands
 ```bash
@@ -100,21 +110,32 @@ Full feasibility study: [`docs/ROUTE_B_STUDY.md`](docs/ROUTE_B_STUDY.md)
 git clone git@github.com:linuxkafe/SuperMetroid3DS-Recomp.git
 cd SuperMetroid3DS-Recomp
 
-# Set environment
+# Set environment (ROM must be present)
 export UPSTREAM_ROOT=/path/to/SuperMetroidRecomp
+export ROM_PATH=/path/to/SuperMetroid-usa.sfc
 export GEN_DIR=/path/to/SuperMetroidRecomp-work/src/gen
 
-# Build 3DS homebrew
+# Build 3DS homebrew (test pattern build, default)
 make docker-build
+
+# Build with core (requires ROM regeneration first - T027 incomplete)
+make docker-build SM_WITH_CORE=1
 ```
 
-### Performance (Azahar headless, 500+ frames tested):
-| Build | sys_fps | emu_speed |
-|-------|---------|-----------|
-| SM_WITH_CORE=0 | 0 / 450 fps | 0.02x - 8.7x |
-| SM_WITH_CORE=1 | 44 / 217 fps | 0.2x - 4.0x |
+### Build Requirements
 
-The core has limited performance due to lack of 3DS-specific optimizations.
+**For SM_WITH_CORE=1:**
+1. You must have `make regen` completed first (generates ~88 MB of code from ROM)
+2. GEN_DIR must point to the `src/gen` directory containing generated bank files
+3. The ARM11 fiber shim (T027) is **not fully implemented** - this build may crash
+
+### Performance Notes
+The test pattern build (`SM_WITH_CORE=0`) provides a visual test of the rendering pipeline:
+- Renders color gradients (256x224, letterboxed to 400x240)
+- Interactive center block changes color when buttons are pressed
+- Used to verify the framebuffer and input systems work correctly
+
+The core build (`SM_WITH_CORE=1`) would run the actual game, but is **not currently linkable** due to T027.
 
 ### Headless Validation (CI)
 ```bash
@@ -176,16 +197,29 @@ Upstream: [SuperMetroidRecomp](https://github.com/mstan/SuperMetroidRecomp) — 
 
 ## Troubleshooting
 
-### Game crashes on real 3DS
-- This is a known issue (T027)
-- The fiber shim for ARM11 context switching is not yet implemented
-- The game works correctly in the Azahar emulator
+### Game crashes on real 3DS / emulator shows test pattern
+- This is expected for `SM_WITH_CORE=0` (default) build
+- The default build shows a test pattern (color gradients), NOT the actual game
+- To run the game, you need `SM_WITH_CORE=1` with a regenerated core (T027)
+
+### T027: Fiber shim not implemented
+- The ARM11 cooperative scheduler requires fiber context switching
+- The 3DS has no `<ucontext.h>` (POSIX fiber API)
+- A pthread-based fiber shim is implemented in `platform/3ds/fiber_compat.c`
+- **Status**: Stub implementation exists, but proper ARM11 context switching not verified
+- Test pattern build works for bring-up; core build requires T027 resolution
 
 ### ROM not found
 - Ensure the ROM file is named `SuperMetroid-usa.sfc` or `sm.sfc`
-- The ROM must be in the same directory as the `.3dsx` file
+- The ROM must be in the same directory as the `.3dsx` file OR pass argv[0] path
 - Verify the ROM SHA-256 matches the expected value
 
 ### Build fails with "SM_WITH_CORE=ON requires -DGEN_DIR"
-- Run `make regen` first to generate the core from the ROM
-- Or use the pre-built core from the UPSTREAM_ROOT worktree
+- Run `make regen` to generate the core from the ROM
+- GEN_DIR must point to `SuperMetroidRecomp-work/src/gen` containing 338 `bank*.c` files
+- This regenerates ~88 MB of C code from the ROM
+
+### Core build does not run game in emulator
+- The fiber shim implementation may not properly save/restore ARM11 context
+- The build compiles but the scheduler may fail at runtime
+- Further debugging required with real hardware testing
